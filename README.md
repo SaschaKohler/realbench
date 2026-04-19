@@ -4,32 +4,38 @@ Performance Profiling as a Service for C++, Rust, and Go projects.
 
 ## Features
 
-- 🔥 Automatic sampling profiling via CI/CD integration
-- 📊 Flamegraph generation and visualization
+- 🔥 Sampling profiler via `perf_event_open` — zero instrumentation required
+- 📊 Flamegraph generation (SVG) and interactive visualization
 - 📈 Historical diff view for performance regression detection
-- 🤖 LLM-based optimization suggestions powered by Claude
+- 🤖 LLM-based optimization suggestions powered by Anthropic Claude
+- 🔐 Clerk authentication with per-user project isolation
 
 ## Project Structure
 
 ```
 realbench/
 ├── apps/
-│   ├── api/          # Hono backend with BullMQ workers
-│   └── web/          # React dashboard (TBD)
+│   ├── api/          # Hono API server + pg-boss profiling worker
+│   └── web/          # React 18 dashboard (Vite, TailwindCSS, TanStack Query)
 ├── packages/
 │   └── shared/       # Shared TypeScript types and Drizzle schema
 └── lib/
-    └── profiler/     # C++ core library (TBD)
+    └── profiler/     # C++ sampling profiler (perf_event_open + N-API bindings)
+        ├── src/      # sampler, flamegraph, diff, symbol_resolver
+        ├── bindings/ # Node.js N-API addon
+        └── tests/    # Google Test suite + sample binary
 ```
 
 ## Tech Stack
 
-- **Backend**: Node.js 20, Hono, Drizzle ORM, BullMQ, Redis
-- **Frontend**: React 18, TypeScript, Vite, TailwindCSS
-- **Database**: PostgreSQL 15
-- **Storage**: Cloudflare R2
+- **Backend**: Node.js 20, Hono, Drizzle ORM, pg-boss (PostgreSQL-native queue)
+- **Frontend**: React 18, TypeScript, Vite, TailwindCSS, TanStack Query
+- **Database**: PostgreSQL 15 (app data + job queue)
+- **Storage**: Cloudflare R2 (flamegraph SVGs, uploaded binaries)
 - **Auth**: Clerk
-- **LLM**: Anthropic Claude (claude-sonnet-4-20250514)
+- **LLM**: Anthropic Claude
+- **Profiler**: C++ (`perf_event_open`, libelf, N-API)
+- **Deploy**: Fly.io (fra region)
 
 ## Setup
 
@@ -38,7 +44,7 @@ realbench/
 - Node.js 20+
 - pnpm 8+
 - PostgreSQL 15+
-- Redis
+- Linux host (required for `perf_event_open` in the profiling worker)
 
 ### Installation
 
@@ -48,46 +54,101 @@ pnpm install
 
 # Setup environment variables
 cp apps/api/.env.example apps/api/.env
-# Edit apps/api/.env with your credentials
+cp apps/web/.env.example apps/web/.env
+# Edit both .env files with your credentials
 
-# Generate Drizzle schema
-pnpm db:generate
+# Run database migrations
+pnpm db:migrate
 
-# Push schema to database
-pnpm db:push
+# Build shared package
+pnpm --filter @realbench/shared build
 ```
 
 ### Development
 
 ```bash
-# Start all apps in development mode
+# Start API and web in parallel
 pnpm dev
 
-# Or start individual apps
-pnpm --filter api dev
-pnpm --filter web dev
+# Or individually
+pnpm --filter api dev    # http://localhost:3000
+pnpm --filter web dev    # http://localhost:5173
+```
+
+### Building the C++ Profiler (Linux only)
+
+```bash
+cd lib/profiler
+npm install
+npm run build            # compiles the N-API addon via node-gyp
+
+# Run integration tests
+cd build && ctest
+
+# Required system packages (Debian/Ubuntu)
+sudo apt-get install libelf-dev libunwind-dev
+sudo sysctl kernel.perf_event_paranoid=-1
 ```
 
 ### API Endpoints
 
-- `POST /api/v1/profile` - Upload binary and enqueue profiling job
-- `GET /api/v1/projects` - List all projects
-- `POST /api/v1/projects` - Create new project
-- `GET /api/v1/projects/:id/runs` - List runs for a project
-- `GET /api/v1/runs/:id` - Get run details
-- `GET /api/v1/runs/:id/diff/:baseId` - Compare two runs
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check |
+| `POST` | `/api/v1/profile` | Upload binary and enqueue profiling job |
+| `GET` | `/api/v1/projects` | List projects for authenticated user |
+| `POST` | `/api/v1/projects` | Create new project |
+| `GET` | `/api/v1/projects/:id/runs` | List profiling runs for a project |
+| `GET` | `/api/v1/runs/:id` | Get run details (flamegraph URL, hotspots, suggestions) |
+| `GET` | `/api/v1/runs/:id/diff/:baseId` | Compare two runs |
 
-## Phase 1 MVP Status
+## Deployment (Fly.io)
 
-- [x] Project structure and monorepo setup
-- [x] Drizzle schema and database configuration
-- [x] Hono API with authentication
-- [x] BullMQ worker for profiling jobs
-- [x] R2 storage integration
-- [x] Claude LLM integration
-- [ ] React dashboard
-- [ ] GitHub Actions integration
-- [ ] C++ profiler core
+```bash
+# First-time infrastructure setup
+./scripts/fly-deploy.sh setup
+
+# Deploy all services
+./scripts/fly-deploy.sh all
+
+# Deploy individually
+./scripts/fly-deploy.sh api
+./scripts/fly-deploy.sh worker
+./scripts/fly-deploy.sh web
+```
+
+Required Fly.io secrets (set via `fly secrets set -a <app> KEY=VALUE`):
+
+| Secret | Apps |
+|--------|------|
+| `DATABASE_URL` | api, worker |
+| `CLERK_SECRET_KEY` | api |
+| `CLERK_PUBLISHABLE_KEY` | api |
+| `R2_ACCOUNT_ID` | api, worker |
+| `R2_ACCESS_KEY_ID` | api, worker |
+| `R2_SECRET_ACCESS_KEY` | api, worker |
+| `R2_BUCKET_NAME` | api, worker |
+| `ANTHROPIC_API_KEY` | worker |
+
+## MVP Status
+
+- [x] Monorepo setup (pnpm workspaces)
+- [x] Drizzle ORM schema + migrations (users, projects, profiling_runs)
+- [x] Hono API with Clerk authentication
+- [x] pg-boss job queue (PostgreSQL-native, no Redis)
+- [x] Cloudflare R2 storage integration
+- [x] Anthropic Claude LLM analysis
+- [x] React dashboard (Dashboard, ProjectDetail, RunDetail pages)
+- [x] C++ sampling profiler core (perf_event_open, ELF symbol resolution)
+- [x] Node.js N-API bindings for C++ profiler
+- [x] Flamegraph SVG generation
+- [x] Profile diff / regression detection
+- [x] Fly.io deployment configuration (api, worker, web)
+- [x] GitHub Actions CI
+- [ ] GitHub Actions CI/CD integration for user repos
+- [ ] Flamegraph interactive viewer (SVG pan/zoom)
+- [ ] Diff visualization in the UI
+- [ ] Stripe billing
 
 ## License
 

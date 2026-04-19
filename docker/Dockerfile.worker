@@ -53,7 +53,9 @@ RUN apk add --no-cache \
     valgrind \
     gcompat \
     libc6-compat \
-    patchelf
+    patchelf \
+    elfutils-dev \
+    libunwind-dev
 
 # node_modules aus Builder übernehmen (workspace dependencies können nicht neu installiert werden)
 COPY --from=builder /app/node_modules ./node_modules
@@ -72,8 +74,6 @@ COPY --from=builder /app/package.json ./
 COPY --from=builder /app/apps/api/package.json ./apps/api/
 COPY --from=builder /app/packages/shared/package.json ./packages/shared/
 COPY --from=builder /app/lib/profiler/package.json ./lib/profiler/
-
-EXPOSE 3000
 
 WORKDIR /app/apps/api
 

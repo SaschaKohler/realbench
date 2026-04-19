@@ -58,9 +58,14 @@ copy_env_to_secrets() {
         [[ "$key" =~ ^#.*$ ]] && continue
         [[ -z "$key" ]] && continue
 
+        # Entferne umschließende Anführungszeichen vom Wert
+        value="${value%\'}"
+        value="${value#\'}"
+        value="${value%\"}"
+        value="${value#\"}"
+
         case "$key" in
             DATABASE_URL|CLERK_SECRET_KEY|CLERK_PUBLISHABLE_KEY|\
-            AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION|AWS_BUCKET_NAME|\
             R2_ACCOUNT_ID|R2_ACCESS_KEY_ID|R2_SECRET_ACCESS_KEY|R2_BUCKET_NAME|\
             ANTHROPIC_API_KEY)
                 secrets="${secrets}${key}=${value} "
@@ -114,9 +119,37 @@ setup_infrastructure() {
     echo "  fly postgres connect -a realbench-db --print-url"
 }
 
+run_migrations() {
+    log_info "=== Running Drizzle Migrations ==="
+    cd "${PROJECT_ROOT}"
+
+    local env_file="${PROJECT_ROOT}/apps/api/.env"
+    if [[ ! -f "$env_file" ]]; then
+        log_warn ".env nicht gefunden – Migrations werden übersprungen"
+        return
+    fi
+
+    # DATABASE_URL aus .env laden (Anführungszeichen entfernen)
+    local db_url
+    db_url=$(grep '^DATABASE_URL=' "$env_file" | cut -d'=' -f2- | tr -d '"\047')
+    if [[ -z "$db_url" ]]; then
+        log_warn "DATABASE_URL nicht in .env gefunden – Migrations werden übersprungen"
+        return
+    fi
+
+    DATABASE_URL="$db_url" pnpm --filter api db:migrate || {
+        log_error "Drizzle Migrations fehlgeschlagen"
+        return 1
+    }
+
+    log_info "Migrations erfolgreich ausgeführt"
+}
+
 deploy_api() {
     log_info "=== Deploying RealBench API ==="
     cd "${PROJECT_ROOT}"
+
+    run_migrations
 
     fly deploy -c fly.api.toml -a realbench-api || {
         log_error "API Deployment fehlgeschlagen"
