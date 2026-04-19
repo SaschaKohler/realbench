@@ -48,6 +48,10 @@ COPY --from=builder /app/package.json ./
 COPY --from=builder /app/apps/api/package.json ./apps/api/
 COPY --from=builder /app/packages/shared/package.json ./packages/shared/
 
+# Drizzle config for migrations
+COPY --from=builder /app/apps/api/drizzle.config.ts ./apps/api/
+COPY --from=builder /app/apps/api/drizzle ./apps/api/drizzle
+
 # Non-root user
 USER node
 

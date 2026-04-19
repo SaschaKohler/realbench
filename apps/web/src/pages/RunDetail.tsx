@@ -33,6 +33,13 @@ export default function RunDetail() {
           <p className="text-gray-400 font-mono">{run?.commitSha}</p>
         </div>
 
+        {run?.error && (
+          <div className="bg-red-900/50 border border-red-700 rounded-lg p-6 mb-8">
+            <h3 className="text-xl font-semibold mb-2 text-red-200">Profiling Failed</h3>
+            <p className="text-red-100 font-mono text-sm">{run.error}</p>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
           <div className="bg-gray-800 rounded-lg p-6">
             <h3 className="text-xl font-semibold mb-4">Run Details</h3>
@@ -47,7 +54,9 @@ export default function RunDetail() {
               </div>
               <div>
                 <dt className="text-gray-400 text-sm">Status</dt>
-                <dd className="text-white">{run?.status}</dd>
+                <dd className={`${run?.error ? 'text-red-400' : 'text-white'}`}>
+                  {run?.status}{run?.error && ' (with errors)'}
+                </dd>
               </div>
               <div>
                 <dt className="text-gray-400 text-sm">Duration</dt>

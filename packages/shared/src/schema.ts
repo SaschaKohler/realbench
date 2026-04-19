@@ -33,6 +33,7 @@ export const profilingRuns = pgTable('profiling_runs', {
   suggestions: jsonb('suggestions'),
   regressionDetected: boolean('regression_detected'),
   durationMs: integer('duration_ms'),
+  error: text('error'),
   createdAt: timestamp('created_at').defaultNow(),
 });
 

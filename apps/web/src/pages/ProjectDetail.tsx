@@ -1,6 +1,34 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useProjectRuns, useProfileBinary } from '../lib/api';
+
+const ESTIMATED_DURATION_MS = 45_000;
+
+function ElapsedProgressBar({ createdAt, status }: { createdAt: string; status: string }) {
+  const [pct, setPct] = useState(0);
+
+  useEffect(() => {
+    const start = new Date(createdAt).getTime();
+    const tick = () => {
+      const elapsed = Date.now() - start;
+      setPct(Math.min(99, (elapsed / ESTIMATED_DURATION_MS) * 100));
+    };
+    tick();
+    const id = setInterval(tick, 500);
+    return () => clearInterval(id);
+  }, [createdAt]);
+
+  const color = status === 'pending' ? 'bg-gray-500' : 'bg-yellow-500';
+
+  return (
+    <div className="mt-1 w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
+      <div
+        className={`h-1.5 rounded-full transition-all duration-500 ${color}`}
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  );
+}
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
@@ -138,7 +166,7 @@ export default function ProjectDetail() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">{run.branch}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">{run.buildType}</td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-6 py-4">
                       <span
                         className={`px-2 py-1 text-xs rounded-full ${
                           run.status === 'done'
@@ -152,6 +180,9 @@ export default function ProjectDetail() {
                       >
                         {run.status}
                       </span>
+                      {(run.status === 'pending' || run.status === 'processing') && (
+                        <ElapsedProgressBar createdAt={run.createdAt} status={run.status} />
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">
                       {new Date(run.createdAt).toLocaleString()}

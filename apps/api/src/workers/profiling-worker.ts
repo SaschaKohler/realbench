@@ -1,8 +1,6 @@
 import { writeFile, unlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { eq } from 'drizzle-orm';
 
 import { db } from '../db/index.js';
@@ -12,10 +10,12 @@ import { analyzeProfiling } from '../services/llm.js';
 import { getBoss, PROFILING_QUEUE, ProfilingJobData } from './queue.js';
 import { profileBinary } from '../services/profiler.js';
 
-const execFileAsync = promisify(execFile);
-
-async function processProfilingJob(data: ProfilingJobData) {
+async function processProfilingJob(data: ProfilingJobData, markJobDone: () => Promise<void>) {
   const { runId, projectId, binaryKey, commitSha, branch, buildType } = data;
+
+  // Job sofort bestätigen - Profiling läuft unabhängig
+  await markJobDone();
+  console.log(`Job ${runId} acknowledged, starting profiling...`);
 
   await db
     .update(profilingRuns)
@@ -27,26 +27,15 @@ async function processProfilingJob(data: ProfilingJobData) {
     const binaryPath = join(tmpdir(), `realbench-${runId}`);
     await writeFile(binaryPath, binaryBuffer);
 
-    // Patch ELF interpreter so glibc-linked binaries (Ubuntu/Debian) run on Alpine/musl
-    try {
-      await execFileAsync('patchelf', [
-        '--set-interpreter', '/lib/ld-musl-x86_64.so.1',
-        binaryPath,
-      ]);
-    } catch (_e) {
-      // Non-ELF or already musl – ignore
-    }
-
     let profileResult;
     try {
+      // Profiling läuft im separaten Worker Thread - nicht blockierend für DB
       profileResult = await profileBinary(binaryPath, {
         durationSeconds: 30,
         frequencyHz: 99,
         includeKernel: false,
       });
     } finally {
-      // Binary darf erst gelöscht werden, nachdem der Profiler fertig ist.
-      // (callgrind hält die Datei während der Analyse offen)
       await unlink(binaryPath).catch(() => {});
     }
 
@@ -82,6 +71,7 @@ async function processProfilingJob(data: ProfilingJobData) {
         flamegraphUrl: null,
         regressionDetected: null,
         durationMs: null,
+        error: null,
         createdAt: new Date(),
         projectName: projectResult.name,
         language: projectResult.language,
@@ -101,11 +91,12 @@ async function processProfilingJob(data: ProfilingJobData) {
       })
       .where(eq(profilingRuns.id, runId));
   } catch (error) {
-    console.error('Profiling job failed:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('Profiling job failed:', errorMessage);
 
     await db
       .update(profilingRuns)
-      .set({ status: 'failed' })
+      .set({ status: 'failed', error: errorMessage })
       .where(eq(profilingRuns.id, runId));
 
     throw error;
@@ -115,16 +106,32 @@ async function processProfilingJob(data: ProfilingJobData) {
 async function startWorker() {
   const boss = await getBoss();
 
-  await boss.work<ProfilingJobData>(PROFILING_QUEUE, { batchSize: 1 }, async (jobs) => {
+  await boss.work<ProfilingJobData>(PROFILING_QUEUE, { 
+    batchSize: 1,
+    includeMetadata: true  // Ermöglicht Zugriff auf job.id
+  }, async (jobs) => {
     for (const job of jobs) {
-      console.log(`Processing job ${job.id}`);
-      await processProfilingJob(job.data);
-      console.log(`Job ${job.id} completed`);
+      const jobId = (job as any).id;
+      console.log(`Processing job ${jobId}`);
+      // Job sofort bestätigen, dann asynchron verarbeiten
+      await processProfilingJob(job.data, async () => {
+        // Job sofort als erledigt markieren - Profiling läuft im Hintergrund
+        await boss!.complete(PROFILING_QUEUE, jobId);
+      });
+      console.log(`Job ${jobId} acknowledged, processing continues in background`);
     }
   });
 
   boss.on('error', (err) => {
     console.error('pg-boss error:', err);
+    // Exit on fatal connection errors so Fly.io restarts with fresh connections
+    const errorMessage = err.message || '';
+    if (errorMessage.includes('Connection terminated unexpectedly') ||
+        errorMessage.includes('Connection closed') ||
+        errorMessage.includes('ECONNRESET')) {
+      console.error('Fatal connection error, exiting to restart...');
+      process.exit(1);
+    }
   });
 
   console.log('✅ Profiling worker started, waiting for jobs...');

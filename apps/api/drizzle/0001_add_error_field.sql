@@ -1,0 +1,1 @@
+ALTER TABLE "profiling_runs" ADD COLUMN "error" text;

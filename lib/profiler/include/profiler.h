@@ -54,6 +54,8 @@ struct ProfileResult {
     uint32_t duration_ms;
     std::string target_binary;
     std::string commit_sha;
+    int exit_code = 0;                  // Binary execution exit code (0 = success)
+    std::string error_message;          // Error message if profiling failed
 };
 
 // Main profiler class

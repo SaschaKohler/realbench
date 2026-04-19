@@ -117,31 +117,70 @@ private:
     static Object ResultToObject(Napi::Env env, const ProfileResult& result) {
         Object obj = Object::New(env);
         
-        Array hotspots = Array::New(env, result.hotspots.size());
-        for (size_t i = 0; i < result.hotspots.size(); ++i) {
-            hotspots[i] = HotspotToObject(env, result.hotspots[i]);
+        try {
+            Array hotspots = Array::New(env, result.hotspots.size());
+            for (size_t i = 0; i < result.hotspots.size(); ++i) {
+                hotspots[i] = HotspotToObject(env, result.hotspots[i]);
+            }
+            
+            obj.Set("hotspots", hotspots);
+            
+            // Handle potentially large flamegraph strings safely
+            if (result.flamegraph_svg.size() > 10 * 1024 * 1024) {
+                // Truncate very large SVGs (10MB limit)
+                obj.Set("flamegraphSvg", String::New(env, "<svg>Data too large</svg>"));
+            } else {
+                obj.Set("flamegraphSvg", String::New(env, result.flamegraph_svg));
+            }
+            
+            if (result.flamegraph_json.size() > 5 * 1024 * 1024) {
+                obj.Set("flamegraphJson", String::New(env, "{}"));
+            } else {
+                obj.Set("flamegraphJson", String::New(env, result.flamegraph_json));
+            }
+            
+            obj.Set("totalSamples", Number::New(env, static_cast<double>(result.total_samples)));
+            obj.Set("durationMs", Number::New(env, result.duration_ms));
+            obj.Set("targetBinary", String::New(env, result.target_binary));
+            obj.Set("commitSha", String::New(env, result.commit_sha));
+            obj.Set("exitCode", Number::New(env, result.exit_code));
+            obj.Set("errorMessage", String::New(env, result.error_message));
+        } catch (const std::exception& e) {
+            Error::New(env, std::string("Failed to convert result: ") + e.what()).ThrowAsJavaScriptException();
+            return env.Null().As<Object>();
         }
-        
-        obj.Set("hotspots", hotspots);
-        obj.Set("flamegraphSvg", String::New(env, result.flamegraph_svg));
-        obj.Set("flamegraphJson", String::New(env, result.flamegraph_json));
-        obj.Set("totalSamples", Number::New(env, result.total_samples));
-        obj.Set("durationMs", Number::New(env, result.duration_ms));
-        obj.Set("targetBinary", String::New(env, result.target_binary));
-        obj.Set("commitSha", String::New(env, result.commit_sha));
-        
+
         return obj;
     }
 
     static Object HotspotToObject(Napi::Env env, const Hotspot& hotspot) {
         Object obj = Object::New(env);
         
-        obj.Set("symbol", String::New(env, hotspot.symbol));
-        obj.Set("selfSamples", Number::New(env, hotspot.self_samples));
-        obj.Set("totalSamples", Number::New(env, hotspot.total_samples));
-        obj.Set("callCount", Number::New(env, hotspot.call_count));
-        obj.Set("selfPct", Number::New(env, hotspot.self_pct));
-        obj.Set("totalPct", Number::New(env, hotspot.total_pct));
+        try {
+            // Validate symbol string - replace invalid UTF-8 sequences
+            std::string safe_symbol = hotspot.symbol;
+            for (auto& c : safe_symbol) {
+                if (c == 0 || (unsigned char)c > 127) {
+                    // Replace non-ASCII with placeholder
+                    c = '?';
+                }
+            }
+            
+            obj.Set("symbol", String::New(env, safe_symbol));
+            obj.Set("selfSamples", Number::New(env, static_cast<double>(hotspot.self_samples)));
+            obj.Set("totalSamples", Number::New(env, static_cast<double>(hotspot.total_samples)));
+            obj.Set("callCount", Number::New(env, static_cast<double>(hotspot.call_count)));
+            obj.Set("selfPct", Number::New(env, hotspot.self_pct));
+            obj.Set("totalPct", Number::New(env, hotspot.total_pct));
+        } catch (const std::exception& e) {
+            // Fallback: set empty values on error
+            obj.Set("symbol", String::New(env, "<invalid>"));
+            obj.Set("selfSamples", Number::New(env, 0.0));
+            obj.Set("totalSamples", Number::New(env, 0.0));
+            obj.Set("callCount", Number::New(env, 0.0));
+            obj.Set("selfPct", Number::New(env, 0.0));
+            obj.Set("totalPct", Number::New(env, 0.0));
+        }
         
         return obj;
     }

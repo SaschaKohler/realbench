@@ -1,17 +1,25 @@
 # RealBench Worker
 # Braucht C++ Toolchain für den Profiler
 
-FROM node:20-alpine AS builder
+FROM ubuntu:24.04 AS builder
 
 WORKDIR /app
 
+# Install Node.js 22
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs
+
 # System-Dependencies für C++ Profiler
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     make \
     g++ \
     valgrind \
-    git
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
 # pnpm installieren
 RUN npm install -g pnpm
@@ -42,20 +50,30 @@ RUN pnpm --filter @realbench/api build
 RUN cd lib/profiler && npm install && npm run build
 
 # Production Image
-FROM node:20-alpine AS production
+FROM ubuntu:24.04 AS production
 
 WORKDIR /app
 
+# Install Node.js 22
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
 # Runtime Dependencies (notwendig für laufenden Profiler)
-# gcompat + libc6-compat: GNU libc Kompatibilität für Binaries die auf Ubuntu/Debian gebaut wurden
-# patchelf: zum Umbiegen des ELF-Interpreters auf musl wenn nötig
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     valgrind \
-    gcompat \
-    libc6-compat \
-    patchelf \
-    elfutils-dev \
-    libunwind-dev
+    linux-tools-generic \
+    libelf1 \
+    libdw1 \
+    libunwind8 \
+    && rm -rf /var/lib/apt/lists/*
+
+# perf_event_paranoid auf 1 setzen wird im Container über Fly-Capabilities erledigt;
+# symlink damit 'perf' ohne Versionssuffix gefunden wird
+RUN ln -sf "$(find /usr/lib/linux-tools* /usr/bin /usr/sbin -name 'perf' 2>/dev/null | head -1)" /usr/local/bin/perf 2>/dev/null || true
 
 # node_modules aus Builder übernehmen (workspace dependencies können nicht neu installiert werden)
 COPY --from=builder /app/node_modules ./node_modules

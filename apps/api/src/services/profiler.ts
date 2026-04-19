@@ -29,6 +29,8 @@ interface ProfileResult {
   durationMs: number;
   targetBinary: string;
   commitSha: string;
+  exitCode: number;
+  errorMessage: string;
 }
 
 let profilerNative: any = null;
@@ -162,5 +164,7 @@ function createMockProfileResult(binaryPath: string): ProfileResult {
     durationMs: 30000,
     targetBinary: binaryPath,
     commitSha: '',
+    exitCode: 0,
+    errorMessage: '',
   };
 }

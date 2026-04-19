@@ -13,6 +13,7 @@ export async function getBoss(): Promise<PgBoss> {
       retryBackoff: true,
       deleteAfterDays: 7,
       archiveCompletedAfterSeconds: 86400,
+      max: 5, // Limit pool size to prevent too many idle connections
     });
     await boss.start();
     await boss.createQueue(PROFILING_QUEUE);

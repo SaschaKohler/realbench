@@ -15,8 +15,159 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <cstdint>
 
 namespace realbench {
+
+// ---------------------------------------------------------------------------
+// Function cost record (shared by callgrind and perf parsers)
+// ---------------------------------------------------------------------------
+struct FnCost {
+    std::string name;
+    uint64_t ir      = 0;  // self instruction references
+    // caller → total IR attributed to that caller (for call-graph)
+    std::unordered_map<std::string, uint64_t> callers;
+};
+
+// ---------------------------------------------------------------------------
+// ELF binary type detection
+// ---------------------------------------------------------------------------
+enum class BinaryRuntime { UNKNOWN, NATIVE, GO, RUST };
+
+static BinaryRuntime detect_binary_runtime(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return BinaryRuntime::UNKNOWN;
+
+    // Read ELF header (64 bytes)
+    unsigned char ehdr[64];
+    if (!f.read(reinterpret_cast<char*>(ehdr), sizeof(ehdr))) return BinaryRuntime::UNKNOWN;
+    if (ehdr[0] != 0x7f || ehdr[1] != 'E' || ehdr[2] != 'L' || ehdr[3] != 'F')
+        return BinaryRuntime::UNKNOWN;
+
+    // Section header offset / entry size / count (ELF64)
+    uint64_t shoff  = 0;
+    uint16_t shentsize = 0, shnum = 0, shstrndx = 0;
+    memcpy(&shoff,     ehdr + 40, 8);
+    memcpy(&shentsize, ehdr + 58, 2);
+    memcpy(&shnum,     ehdr + 60, 2);
+    memcpy(&shstrndx,  ehdr + 62, 2);
+
+    if (shoff == 0 || shentsize == 0 || shnum == 0 || shstrndx == 0)
+        return BinaryRuntime::NATIVE;
+
+    // Read section name string table header
+    f.seekg(static_cast<std::streamoff>(shoff + (uint64_t)shstrndx * shentsize));
+    unsigned char shdr[64];
+    if (!f.read(reinterpret_cast<char*>(shdr), sizeof(shdr))) return BinaryRuntime::NATIVE;
+    uint64_t strtab_off = 0, strtab_size = 0;
+    memcpy(&strtab_off,  shdr + 24, 8);
+    memcpy(&strtab_size, shdr + 32, 8);
+    if (strtab_off == 0 || strtab_size > 1024 * 1024) return BinaryRuntime::NATIVE;
+
+    std::string strtab(strtab_size, '\0');
+    f.seekg(static_cast<std::streamoff>(strtab_off));
+    if (!f.read(&strtab[0], strtab_size)) return BinaryRuntime::NATIVE;
+
+    bool has_go_buildid = false;
+    bool has_rustc = false;
+
+    for (int i = 0; i < shnum; ++i) {
+        f.seekg(static_cast<std::streamoff>(shoff + (uint64_t)i * shentsize));
+        unsigned char sh[64];
+        if (!f.read(reinterpret_cast<char*>(sh), sizeof(sh))) break;
+        uint32_t name_idx = 0;
+        memcpy(&name_idx, sh, 4);
+        if (name_idx >= strtab_size) continue;
+        std::string sname(strtab.c_str() + name_idx);
+        if (sname == ".go.buildinfo" || sname == ".gosymtab" || sname == ".gopclntab")
+            has_go_buildid = true;
+        if (sname == ".rustc" || sname.find(".debug_info") == 0) {
+            // .rustc section is unique to rustc-compiled binaries
+            if (sname == ".rustc") has_rustc = true;
+        }
+    }
+
+    if (has_go_buildid) return BinaryRuntime::GO;
+    if (has_rustc)      return BinaryRuntime::RUST;
+    return BinaryRuntime::NATIVE;
+}
+
+// ---------------------------------------------------------------------------
+// perf script folded-stack parser
+//
+// perf script output format (one sample per block):
+//   <comm> <pid>/<tid> [cpu] <time>: <count> cycles:u:
+//          <addr> <symbol> (<dso>)
+//          ...
+// We convert this to the same FnCost structure as callgrind.
+// ---------------------------------------------------------------------------
+static std::vector<FnCost> parse_perf_script_output(const std::string& path) {
+    std::unordered_map<std::string, FnCost> fn_map;
+
+    std::ifstream f(path);
+    if (!f.is_open()) {
+        fprintf(stderr, "[perf] output file not found: %s\n", path.c_str());
+        fflush(stderr);
+        return {};
+    }
+    fprintf(stderr, "[perf] parsing output file: %s\n", path.c_str());
+    fflush(stderr);
+
+    // Collect one stack at a time. A blank line separates samples.
+    std::vector<std::string> stack;
+    bool in_sample = false;
+
+    auto flush_stack = [&]() {
+        if (stack.empty()) return;
+        // stack[0] = innermost (leaf), stack.back() = outermost
+        // Attribute self-cost to leaf, record call edges
+        const std::string& leaf = stack[0];
+        fn_map[leaf].name = leaf;
+        fn_map[leaf].ir += 1;
+        for (size_t i = 1; i < stack.size(); ++i) {
+            const std::string& callee = stack[i - 1];
+            const std::string& caller = stack[i];
+            fn_map[caller].name = caller;
+            fn_map[callee].callers[caller] += 1;
+        }
+        stack.clear();
+        in_sample = false;
+    };
+
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty()) {
+            flush_stack();
+            continue;
+        }
+        // Header line: doesn't start with whitespace
+        if (line[0] != '\t' && line[0] != ' ') {
+            flush_stack();
+            in_sample = true;
+            continue;
+        }
+        if (!in_sample) continue;
+        // Frame line: "\t<addr> <symbol> (<dso>)"
+        std::istringstream iss(line);
+        std::string addr, sym;
+        if (!(iss >> addr >> sym)) continue;
+        // Skip unknown symbols
+        if (sym == "[unknown]" || sym.empty()) continue;
+        // Strip trailing DSO annotation if present (the remaining tokens)
+        stack.push_back(sym);
+    }
+    flush_stack();
+
+    std::vector<FnCost> result;
+    result.reserve(fn_map.size());
+    for (auto& [name, cost] : fn_map) {
+        if (cost.ir > 0 || !cost.callers.empty())
+            result.push_back(std::move(cost));
+    }
+    fprintf(stderr, "[perf] parsed %zu functions\n", result.size());
+    fflush(stderr);
+    return result;
+}
 
 // ---------------------------------------------------------------------------
 // Callgrind output parser
@@ -29,12 +180,6 @@ namespace realbench {
 //   calls=N pos         – followed by cost line for that call edge
 //   <pos> <Ir> ...      – self-cost line for current fn
 // ---------------------------------------------------------------------------
-struct FnCost {
-    std::string name;
-    uint64_t ir      = 0;  // self instruction references
-    // caller → total IR attributed to that caller (for call-graph)
-    std::unordered_map<std::string, uint64_t> callers;
-};
 
 // Parse a compressed name token: "(42) real_name", "(42)", or "real_name"
 // Updates id_map if a new definition is seen. Returns the resolved name.
@@ -135,11 +280,21 @@ static std::vector<FnCost> parse_callgrind_output(const std::string& path) {
     return result;
 }
 
+// Forward declaration
+static int run_and_wait_capture(const std::vector<std::string>& argv, std::string& out_output);
+
 // ---------------------------------------------------------------------------
 // Run a command, capture its combined stdout+stderr, wait for it.
 // Prints command, output, and exit code to our stderr for diagnostics.
 // ---------------------------------------------------------------------------
 static int run_and_wait(const std::vector<std::string>& argv) {
+    std::string dummy;
+    return run_and_wait_capture(argv, dummy);
+}
+
+// Run a command, capture its combined stdout+stderr to out_output, wait for it.
+// Prints command, output, and exit code to our stderr for diagnostics.
+static int run_and_wait_capture(const std::vector<std::string>& argv, std::string& out_output) {
     std::vector<char*> c_argv;
     c_argv.reserve(argv.size() + 1);
 
@@ -176,12 +331,12 @@ static int run_and_wait(const std::vector<std::string>& argv) {
     close(pipefd[1]);
 
     // Read all output
-    std::string output;
+    out_output.clear();
     std::array<char, 512> buf;
     ssize_t n;
     while ((n = read(pipefd[0], buf.data(), buf.size())) > 0) {
-        output.append(buf.data(), n);
-        if (output.size() > 8192) break; // cap at 8 KB
+        out_output.append(buf.data(), n);
+        if (out_output.size() > 8192) break; // cap at 8 KB
     }
     close(pipefd[0]);
 
@@ -189,8 +344,8 @@ static int run_and_wait(const std::vector<std::string>& argv) {
     waitpid(child, &status, 0);
     int rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 
-    if (!output.empty()) {
-        fprintf(stderr, "[callgrind] output:\n%s\n", output.c_str());
+    if (!out_output.empty()) {
+        fprintf(stderr, "[callgrind] output:\n%s\n", out_output.c_str());
     }
     fprintf(stderr, "[callgrind] exit code: %d\n", rc);
     fflush(stderr);
@@ -273,17 +428,12 @@ class Profiler::Impl {
 public:
     explicit Impl(const ProfileConfig& config) : config_(config) {}
 
-    ProfileResult profile_binary(const std::string& binary_path,
-                                 const std::vector<std::string>& args) {
-        auto start = std::chrono::steady_clock::now();
-
-        std::string out_file = make_tmp_path("callgrind_out");
-        remove_if_exists(out_file);
-
-        // Build valgrind command:
-        //   valgrind --tool=callgrind --callgrind-out-file=<out>
-        //            [--collect-systime=yes if kernel requested]
-        //            -- <binary> [args...]
+    // Returns exit code via out_rc, captures output in out_output
+    void profile_binary_callgrind(const std::string& binary_path,
+                                    const std::vector<std::string>& args,
+                                    const std::string& out_file,
+                                    int& out_rc,
+                                    std::string& out_output) {
         std::vector<std::string> cmd;
         cmd.push_back("valgrind");
         cmd.push_back("--tool=callgrind");
@@ -295,56 +445,194 @@ public:
         cmd.push_back(binary_path);
         for (const auto& arg : args) cmd.push_back(arg);
 
-        int rc = run_and_wait(cmd);
-        if (rc == 127) {
+        // Run and capture both exit code and output
+        out_rc = run_and_wait_capture(cmd, out_output);
+        if (out_rc == 127) {
             throw ProfilerException("valgrind not found – please install valgrind");
         }
+    }
+
+    void profile_binary_perf(const std::string& binary_path,
+                                      const std::vector<std::string>& args,
+                                      const std::string& perf_data,
+                                      const std::string& script_out) {
+        // perf record
+        {
+            std::vector<std::string> cmd;
+            cmd.push_back("perf");
+            cmd.push_back("record");
+            cmd.push_back("-F");
+            cmd.push_back(std::to_string(config_.frequency_hz));
+            cmd.push_back("-g");
+            cmd.push_back("--call-graph");
+            cmd.push_back("dwarf,65528");
+            if (!config_.include_kernel) cmd.push_back("--user-callchains");
+            cmd.push_back("-o"); cmd.push_back(perf_data);
+            cmd.push_back("--");
+            cmd.push_back(binary_path);
+            for (const auto& arg : args) cmd.push_back(arg);
+
+            int rc = run_and_wait(cmd);
+            if (rc == 127) {
+                throw ProfilerException("perf not found – please install linux-perf");
+            }
+        }
+        // perf script → text
+        {
+            std::vector<std::string> cmd;
+            cmd.push_back("perf");
+            cmd.push_back("script");
+            cmd.push_back("-i"); cmd.push_back(perf_data);
+            // redirect stdout to script_out via shell wrapper not available;
+            // run_and_wait captures output — write it manually
+            std::vector<char*> c_argv;
+            for (auto& s : cmd) c_argv.push_back(const_cast<char*>(s.c_str()));
+            c_argv.push_back(nullptr);
+
+            int pipefd[2];
+            if (pipe(pipefd) == -1)
+                throw ProfilerException(std::string("pipe: ") + strerror(errno));
+            pid_t child = fork();
+            if (child == -1) { close(pipefd[0]); close(pipefd[1]);
+                throw ProfilerException(std::string("fork: ") + strerror(errno)); }
+            if (child == 0) {
+                close(pipefd[0]);
+                dup2(pipefd[1], STDOUT_FILENO);
+                close(pipefd[1]);
+                execvp(c_argv[0], c_argv.data());
+                _exit(127);
+            }
+            close(pipefd[1]);
+            // Write piped output to script_out file
+            FILE* out = fopen(script_out.c_str(), "w");
+            if (!out) { close(pipefd[0]); throw ProfilerException("fopen script_out"); }
+            std::array<char, 4096> buf;
+            ssize_t n;
+            while ((n = read(pipefd[0], buf.data(), buf.size())) > 0)
+                fwrite(buf.data(), 1, n, out);
+            fclose(out);
+            close(pipefd[0]);
+            int status = 0; waitpid(child, &status, 0);
+            int rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+            fprintf(stderr, "[perf] script exit code: %d\n", rc);
+            fflush(stderr);
+        }
+    }
+
+    ProfileResult profile_binary(const std::string& binary_path,
+                                 const std::vector<std::string>& args) {
+        auto start = std::chrono::steady_clock::now();
+
+        BinaryRuntime rt = detect_binary_runtime(binary_path);
+        fprintf(stderr, "[profiler] detected runtime: %s\n",
+            rt == BinaryRuntime::GO   ? "go"   :
+            rt == BinaryRuntime::RUST ? "rust" : "native");
+        fflush(stderr);
+
+        std::vector<FnCost> costs;
+
+        // Use perf sampling for all ELF binaries - much faster than callgrind
+        // (5-10% overhead vs 10-50x slowdown) and captures real execution
+        std::string perf_data   = make_tmp_path("perf_data");
+        std::string script_out  = make_tmp_path("perf_script");
+        remove_if_exists(perf_data);
+        remove_if_exists(script_out);
+
+        profile_binary_perf(binary_path, args, perf_data, script_out);
 
         auto end = std::chrono::steady_clock::now();
         uint32_t duration_ms = static_cast<uint32_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
 
-        std::vector<FnCost> costs = parse_callgrind_output(out_file);
-        remove_if_exists(out_file);
+        costs = parse_perf_script_output(script_out);
+        remove_if_exists(perf_data);
+        remove_if_exists(script_out);
 
         if (costs.empty()) {
             throw ProfilerException(
-                "callgrind produced no output (rc=" + std::to_string(rc) +
-                "). Check that the binary exists and runs correctly.");
+                "perf produced no output for " + binary_path +
+                ". Ensure perf_event_paranoid <= 1 and binary has debug info.");
         }
-
         return build_result(costs, binary_path, duration_ms);
     }
 
     ProfileResult profile_pid(pid_t pid) {
         auto start = std::chrono::steady_clock::now();
 
-        std::string out_file = make_tmp_path("callgrind_pid_out");
-        remove_if_exists(out_file);
+        std::string perf_data   = make_tmp_path("perf_pid_data");
+        std::string script_out  = make_tmp_path("perf_pid_script");
+        remove_if_exists(perf_data);
+        remove_if_exists(script_out);
 
-        // callgrind --pid attaches to a running process (requires ptrace permission)
-        std::vector<std::string> cmd;
-        cmd.push_back("valgrind");
-        cmd.push_back("--tool=callgrind");
-        cmd.push_back("--callgrind-out-file=" + out_file);
-        cmd.push_back("--pid=" + std::to_string(pid));
+        // perf attach to running process
+        {
+            std::vector<std::string> cmd;
+            cmd.push_back("perf");
+            cmd.push_back("record");
+            cmd.push_back("-F");
+            cmd.push_back(std::to_string(config_.frequency_hz));
+            cmd.push_back("-g");
+            cmd.push_back("--call-graph");
+            cmd.push_back("dwarf,65528");
+            if (!config_.include_kernel) cmd.push_back("--user-callchains");
+            cmd.push_back("-p"); cmd.push_back(std::to_string(pid));
+            cmd.push_back("-o"); cmd.push_back(perf_data);
+            cmd.push_back("--duration"); cmd.push_back(std::to_string(config_.duration_seconds));
 
-        int rc = run_and_wait(cmd);
-        if (rc == 127) {
-            throw ProfilerException("valgrind not found – please install valgrind");
+            int rc = run_and_wait(cmd);
+            if (rc == 127) {
+                throw ProfilerException("perf not found – please install linux-perf");
+            }
+        }
+
+        // perf script → text
+        {
+            std::vector<std::string> cmd;
+            cmd.push_back("perf");
+            cmd.push_back("script");
+            cmd.push_back("-i"); cmd.push_back(perf_data);
+
+            std::vector<char*> c_argv;
+            for (auto& s : cmd) c_argv.push_back(const_cast<char*>(s.c_str()));
+            c_argv.push_back(nullptr);
+
+            int pipefd[2];
+            if (pipe(pipefd) == -1)
+                throw ProfilerException(std::string("pipe: ") + strerror(errno));
+            pid_t child = fork();
+            if (child == -1) { close(pipefd[0]); close(pipefd[1]);
+                throw ProfilerException(std::string("fork: ") + strerror(errno)); }
+            if (child == 0) {
+                close(pipefd[0]);
+                dup2(pipefd[1], STDOUT_FILENO);
+                close(pipefd[1]);
+                execvp(c_argv[0], c_argv.data());
+                _exit(127);
+            }
+            close(pipefd[1]);
+            FILE* out = fopen(script_out.c_str(), "w");
+            if (!out) { close(pipefd[0]); throw ProfilerException("fopen script_out"); }
+            std::array<char, 4096> buf;
+            ssize_t n;
+            while ((n = read(pipefd[0], buf.data(), buf.size())) > 0)
+                fwrite(buf.data(), 1, n, out);
+            fclose(out);
+            close(pipefd[0]);
+            int status = 0; waitpid(child, &status, 0);
         }
 
         auto end = std::chrono::steady_clock::now();
         uint32_t duration_ms = static_cast<uint32_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
 
-        std::vector<FnCost> costs = parse_callgrind_output(out_file);
-        remove_if_exists(out_file);
+        std::vector<FnCost> costs = parse_perf_script_output(script_out);
+        remove_if_exists(perf_data);
+        remove_if_exists(script_out);
 
         if (costs.empty()) {
             throw ProfilerException(
-                "callgrind produced no output for pid " + std::to_string(pid) +
-                " (rc=" + std::to_string(rc) + ")");
+                "perf produced no output for pid " + std::to_string(pid) +
+                ". Ensure perf_event_paranoid <= 1 and process has debug info.");
         }
 
         return build_result(costs, "", duration_ms);
