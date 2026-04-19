@@ -410,12 +410,12 @@ NODE_ENV=production
 Was in Phase 1 gebaut wird — alles andere ist Out of Scope:
 
 - [x] C++ CLI-Tool: `realbench profile ./my_binary` → gibt `flamegraph.html` aus
-- [ ] Node.js API: `POST /profile` nimmt Binary entgegen, gibt Job-ID zurück
-- [ ] BullMQ Worker: ruft C++ Addon auf, speichert Ergebnis
-- [ ] PostgreSQL: Runs + Users speichern
-- [ ] R2: Flamegraph SVGs hochladen
-- [ ] React Dashboard: Run-Liste + Flamegraph-Viewer
-- [ ] Claude Integration: Suggestions aus Hotspots generieren
+- [x] Node.js API: `POST /profile` nimmt Binary entgegen, gibt Job-ID zurück
+- [x] BullMQ Worker: ruft C++ Addon auf, speichert Ergebnis
+- [x] PostgreSQL: Runs + Users speichern
+- [x] R2: Flamegraph SVGs hochladen
+- [x] React Dashboard: Run-Liste + Flamegraph-Viewer (statisch, Link auf R2-SVG)
+- [x] Claude Integration: Suggestions aus Hotspots generieren
 - [ ] GitHub Actions: `realbench-action` als YAML-Step
 
 **Out of Scope für Phase 1:**
@@ -426,4 +426,213 @@ Was in Phase 1 gebaut wird — alles andere ist Out of Scope:
 
 ---
 
-*Spec-Version: 1.0 — April 2026*
+## 12. Language-spezifisches Profiling-Handling
+
+Der C++ Core erkennt das Binary-Format automatisch via ELF-Section-Analyse
+(`detect_binary_runtime()` in `sampler.cpp`). Je nach erkannter Runtime
+werden **unterschiedliche perf-Flags und Symbol-Strategien** verwendet:
+
+### C++ / Native (default)
+
+```
+perf record -F <hz> -g --call-graph dwarf,65528 -m 16M -o <out> -- <binary>
+```
+- DWARF-Callgraph mit 65 528-Byte Stack-Sample → vollständige Inlining-Tiefe
+- Symbol-Resolution: ELF-Symboltabelle via libelf + DWARF debug_info
+- Demangling: `__cxa_demangle`
+
+### Go
+
+```
+perf record -F <hz> -g --call-graph fp -m 16M -o <out> -- <binary>
+```
+- Go nutzt Frame-Pointer statt DWARF-Unwinding (seit Go 1.12 standardmäßig aktiv)
+- `--call-graph dwarf` hat unter Go hohen Overhead und erzeugt keine sinnvollen
+  Stacks — daher **fp** (Frame-Pointer) bevorzugen
+- Symbol-Resolution: `.gopclntab`-Section wird direkt ausgewertet → exakte
+  Go-Funktionsnamen statt manglined C-Symbole
+- Goroutine-ID wird aus dem perf-Script-Output extrahiert (TID-Mapping)
+
+### Rust
+
+```
+perf record -F <hz> -g --call-graph dwarf,65528 -m 16M -o <out> -- <binary>
+```
+- Identisch zu C++, da Rust native ELF-Binaries mit DWARF erzeugt
+- Symbol-Demangling: Rust-spezifischer Demangler (rustc-demangle-Algorithmus)
+  statt C++-Demangler — erkennbar am `_R` oder `_ZN`-Prefix
+- Build-Empfehlung im API-Response: `RUSTFLAGS="-C debuginfo=2"` für vollständige
+  Symbolinformation
+
+### Implementierungsdetail (`sampler.cpp`)
+
+```cpp
+// profile_binary_perf() liest rt und wählt call-graph-Strategie:
+if (rt == BinaryRuntime::GO) {
+    cmd.push_back("fp");          // Frame-Pointer für Go
+} else {
+    cmd.push_back("dwarf,65528"); // DWARF für C++/Rust
+}
+cmd.push_back("-m");
+cmd.push_back("16M");             // Mmap-Ringpuffer für alle Runtimes
+
+// Symbol-Demangling in build_result() je nach rt:
+if (rt == BinaryRuntime::RUST)   demangle_rust(name);
+else if (rt == BinaryRuntime::NATIVE) demangle_cpp(name);
+// Go: keine Demangling-Schicht notwendig
+```
+
+### Schema-Erweiterung (`profilingRuns`)
+
+```typescript
+detectedLanguage: text('detected_language'), // 'cpp' | 'go' | 'rust' | 'unknown'
+callgraphMode:   text('callgraph_mode'),     // 'dwarf' | 'fp'
+```
+
+---
+
+## 13. Large Binary / Large Project Support
+
+Um auch umfangreiche Projekte (>500 MB Binary, große Debug-Symboltabellen)
+profilen zu können, müssen an mehreren Stellen Grenzen angehoben werden:
+
+### Upload-Limit (API)
+
+| Layer | Aktuell | Ziel |
+|---|---|---|
+| Hono `bodyLimit` | Standard (~1 MB) | **500 MB** |
+| R2 Upload | Streaming via `@aws-sdk/lib-storage` multipart | unverändert |
+| Worker tmpdir | kein Limit | Binary + perf.data + script.out ≤ 3× Binärgröße |
+
+```typescript
+// apps/api/src/index.ts — globales bodyLimit für Profile-Route
+import { bodyLimit } from 'hono/body-limit';
+app.use('/api/v1/profile', bodyLimit({ maxSize: 500 * 1024 * 1024 }));
+```
+
+### perf record — Ringpuffer
+
+- Standardmäßig 256 KiB Mmap-Ringpuffer → bei langen Läufen gehen Samples verloren
+- Fix: `-m 16M` Flag in `profile_binary_perf()` (siehe Abschnitt 12)
+
+### Timeout-Anpassung (`profiler.ts`)
+
+```typescript
+// Aktuell: (durationSeconds * 60 + 120) * 1000
+// Neu (großzügiger für große Binaries):
+const timeoutMs = (durationSeconds * 120 + 300) * 1000;
+```
+
+### Fly.io Worker VM
+
+```toml
+# fly.worker.toml
+[vm]
+  memory = '4gb'
+  cpus = 2
+[mounts]
+  source = 'realbench_tmp'
+  destination = '/tmp'
+  size_gb = 20
+```
+
+### Streaming-Parser (Phase 2)
+
+`perf script`-Output kann mehrere GB erreichen. Statt vollständig auf Disk
+zu spulen und dann zu parsen: **Streaming-Parser** der direkt aus dem Pipe-FD
+liest und Frames on-the-fly akkumuliert. Dies vermeidet das 3×-Disk-Overhead.
+
+---
+
+## 14. Interaktiver Flamegraph
+
+### Entscheidung: Eigene React-Komponente auf Basis von D3
+
+**Warum nicht `d3-flame-graph` Library:**
+- Keine nativen TypeScript-Typings
+- Stark eingeschränkte Interaktivität (kein Diff-Overlay, kein Filter)
+- Bundle-Bloat (~150 KB zusätzlich)
+
+**Gewählter Ansatz:** Eigene `<FlameGraph>`-Komponente auf Basis von
+`d3-hierarchy` + `d3-scale` + `d3-zoom`.
+
+### Datenformat
+
+```typescript
+// packages/shared/src/types.ts
+export interface FlameNode {
+  name: string;
+  value: number;        // self samples
+  totalValue: number;   // total samples
+  selfPct: number;
+  totalPct: number;
+  file?: string;
+  line?: number;
+  language?: string;    // 'cpp' | 'go' | 'rust'
+  children: FlameNode[];
+}
+```
+
+### Komponenten-API
+
+```tsx
+// apps/web/src/components/FlameGraph.tsx
+<FlameGraph
+  data={flameNode}          // FlameNode root
+  width={containerWidth}
+  height={600}
+  onNodeClick={(node) => setSelectedNode(node)}  // Drill-down/Zoom
+  onSearch={(query) => highlightMatching(query)}  // Regex-Suche
+  colorScheme="hot"         // 'hot' | 'cold' | 'diff'
+  diffBaseline={baseNode}   // optional: diff-coloring
+/>
+```
+
+### Features
+
+| Feature | Beschreibung |
+|---|---|
+| **Zoom/Pan** | Click-to-zoom auf Frame, Breadcrumb-Navigation zurück |
+| **Hover-Tooltip** | Symbol, Datei:Zeile, Self%/Total%, Samples |
+| **Regex-Suche** | Frames highlighten die den Suchbegriff matchen |
+| **Diff-Coloring** | Grün/Rot-Overlay wenn `diffBaseline` gesetzt |
+| **Frame-Auswahl** | Klick auf Frame → scrollt Hotspot-Tabelle zu Zeile |
+| **Export** | Download als SVG oder PNG (via `canvas.toBlob`) |
+
+### Neue API-Route
+
+```
+GET /api/v1/runs/:id/flamegraph.json   → FlameNode (hierarchisch, D3-Format)
+```
+
+Das SVG in R2 bleibt als Fallback erhalten (CLI-Output, E-Mail-Reports).
+
+---
+
+## 15. Nächste Implementierungsschritte (Priorität)
+
+### Priorität 1 — Sofort umsetzbar
+
+1. **`sampler.cpp`:** `profile_binary_perf()` → runtime-abhängige
+   `--call-graph`-Strategie (fp für Go, dwarf für C++/Rust) + `-m 16M`
+2. **`sampler.cpp`:** Rust-Demangling in `build_result()` ergänzen
+3. **`apps/api/src/index.ts`:** `bodyLimit(500 MB)` für `/api/v1/profile`
+4. **`apps/api/src/services/profiler.ts`:** Timeout-Formel anpassen
+
+### Priorität 2 — Frontend / Phase 2
+
+5. **`apps/web/src/components/FlameGraph.tsx`:** Interaktive D3-Komponente
+6. **`apps/api/src/routes/runs.ts`:** `/runs/:id/flamegraph.json`-Route
+7. **`apps/web/src/pages/RunDetail.tsx`:** Embedded Flamegraph statt externem Link
+8. **`lib/profiler/src/flamegraph.cpp`:** JSON-Output auf D3-Hierarchie-Format umstellen
+
+### Priorität 3 — Infrastructure & Scale
+
+9. **`fly.worker.toml`:** 4 GB RAM + 20 GB tmpdir Mount
+10. **Streaming-Parser** für `perf script`-Output (kein Disk-Spooling)
+11. **GitHub Actions `realbench-action`** als wiederverwendbarer YAML-Step
+12. **Diff-Visualisierung im UI** (DiffChart mit Recharts)
+
+---
+
+*Spec-Version: 1.1 — April 2026*

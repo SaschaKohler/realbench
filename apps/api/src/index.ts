@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Variables } from './types.js';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { bodyLimit } from 'hono/body-limit';
 import dotenv from 'dotenv';
 import profileRoutes from './routes/profile.js';
 import projectsRoutes from './routes/projects.js';
@@ -33,6 +34,9 @@ app.use(
 app.get('/health', (c) => {
   return c.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Apply 500MB body limit to profile endpoint for large binary uploads (SPEC §13)
+app.use('/api/v1/profile', bodyLimit({ maxSize: 500 * 1024 * 1024 }));
 
 app.route('/api/v1/profile', profileRoutes);
 app.route('/api/v1/projects', projectsRoutes);

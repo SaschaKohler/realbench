@@ -11,9 +11,14 @@ primary_region = "fra"
   app = "node dist/workers/profiling-worker.js"
 
 [[vm]]
-  memory = "1gb"
+  memory = "4gb"
   cpu_kind = "shared"
-  cpus = 1
+  cpus = 2
+
+[mounts]
+  source = "realbench_tmp"
+  destination = "/tmp"
+  size_gb = 20
 
 [experimental]
   privileged = true

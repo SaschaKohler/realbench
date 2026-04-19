@@ -21,6 +21,94 @@
 namespace realbench {
 
 // ---------------------------------------------------------------------------
+// Rust demangling function
+// ---------------------------------------------------------------------------
+static std::string demangle_rust(const std::string& mangled) {
+  // Rust symbols start with _R (Rust 1.37+) or _ZN (legacy)
+  if (mangled.empty() || (mangled.substr(0, 2) != "_R" && mangled.substr(0, 3) != "_ZN")) {
+    return mangled;
+  }
+  
+  // Try to use rustc-demangle tool if available
+  std::vector<std::string> cmd;
+  cmd.push_back("rustc-demangle");
+  cmd.push_back(mangled);
+  
+  std::vector<char*> c_argv;
+  for (auto& s : cmd)
+    c_argv.push_back(const_cast<char*>(s.c_str()));
+  c_argv.push_back(nullptr);
+  
+  int pipefd[2];
+  if (pipe(pipefd) == -1)
+    return mangled; // fallback to original
+    
+  pid_t child = fork();
+  if (child == -1) {
+    close(pipefd[0]);
+    close(pipefd[1]);
+    return mangled; // fallback to original
+  }
+  
+  if (child == 0) {
+    close(pipefd[0]);
+    dup2(pipefd[1], STDOUT_FILENO);
+    close(pipefd[1]);
+    execvp(c_argv[0], c_argv.data());
+    _exit(127); // rustc-demangle not found
+  }
+  
+  close(pipefd[1]);
+  
+  // Read demangled output
+  std::string output;
+  std::array<char, 1024> buf;
+  ssize_t n;
+  while ((n = read(pipefd[0], buf.data(), buf.size())) > 0)
+    output.append(buf.data(), n);
+  close(pipefd[0]);
+  
+  int status = 0;
+  waitpid(child, &status, 0);
+  int rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  
+  // If rustc-demangle succeeded and produced output, use it
+  if (rc == 0 && !output.empty()) {
+    // Remove trailing newline
+    if (!output.empty() && output.back() == '\n')
+      output.pop_back();
+    return output;
+  }
+  
+  // Fallback: basic Rust symbol cleanup for _ZN format
+  if (mangled.substr(0, 3) == "_ZN") {
+    // Basic _ZN demangling: _ZN4mainE -> main
+    std::string result;
+    size_t i = 3; // skip _ZN
+    while (i < mangled.length()) {
+      // Parse length prefix
+      size_t len = 0;
+      while (i < mangled.length() && std::isdigit(mangled[i])) {
+        len = len * 10 + (mangled[i] - '0');
+        i++;
+      }
+      if (len == 0 || i + len > mangled.length())
+        break;
+      
+      // Extract the component
+      std::string component = mangled.substr(i, len);
+      if (!result.empty())
+        result += "::";
+      result += component;
+      i += len;
+    }
+    return result;
+  }
+  
+  return mangled; // fallback to original
+}
+
+// ---------------------------------------------------------------------------
 // Function cost record (shared by callgrind and perf parsers)
 // ---------------------------------------------------------------------------
 struct FnCost {
@@ -583,6 +671,21 @@ static int run_and_wait_capture(const std::vector<std::string> &argv,
 static ProfileResult build_result(std::vector<FnCost> &costs,
                                   const std::string &binary_path,
                                   uint32_t duration_ms) {
+  // Detect binary runtime for appropriate demangling (SPEC §12)
+  BinaryRuntime rt = BinaryRuntime::NATIVE; // default
+  if (!binary_path.empty()) {
+    rt = detect_binary_runtime(binary_path);
+  }
+
+  // Apply runtime-specific demangling to function names
+  for (auto &c : costs) {
+    if (rt == BinaryRuntime::RUST) {
+      c.name = demangle_rust(c.name);
+    }
+    // Note: C++ demangling is already handled by addr2line -C flag
+    // Note: Go symbols don't need demangling
+  }
+
   // total_ir = sum of all self costs (used for percentages)
   uint64_t total_ir = 0;
   for (const auto &c : costs)
@@ -685,6 +788,9 @@ public:
                            const std::vector<std::string> &args,
                            const std::string &perf_data,
                            const std::string &script_out) {
+    // Detect binary runtime to choose appropriate call-graph strategy
+    BinaryRuntime rt = detect_binary_runtime(binary_path);
+    
     // perf record
     {
       std::vector<std::string> cmd;
@@ -694,7 +800,14 @@ public:
       cmd.push_back(std::to_string(config_.frequency_hz));
       cmd.push_back("-g");
       cmd.push_back("--call-graph");
-      cmd.push_back("dwarf,65528");
+      // Runtime-dependent call-graph strategy (SPEC §12)
+      if (rt == BinaryRuntime::GO) {
+        cmd.push_back("fp");          // Frame-Pointer für Go
+      } else {
+        cmd.push_back("dwarf,65528"); // DWARF für C++/Rust
+      }
+      cmd.push_back("-m");
+      cmd.push_back("16M");             // Mmap-Ringpuffer für alle Runtimes
       if (!config_.include_kernel)
         cmd.push_back("--user-callchains");
       cmd.push_back("-o");
@@ -816,7 +929,9 @@ public:
       cmd.push_back(std::to_string(config_.frequency_hz));
       cmd.push_back("-g");
       cmd.push_back("--call-graph");
-      cmd.push_back("dwarf,65528");
+      cmd.push_back("dwarf,65528"); // For PID profiling, assume native/C++
+      cmd.push_back("-m");
+      cmd.push_back("16M");         // Mmap-Ringpuffer
       if (!config_.include_kernel)
         cmd.push_back("--user-callchains");
       cmd.push_back("-p");

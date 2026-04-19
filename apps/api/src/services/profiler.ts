@@ -77,9 +77,9 @@ export async function profileBinary(
     includeKernel: options.includeKernel || false,
   });
 
-  // callgrind hat typisch 10-50x Overhead; Timeout großzügig setzen
+  // Timeout formula adjusted for large binaries (SPEC §13)
   const durationSeconds = options.durationSeconds || 30;
-  const timeoutMs = (durationSeconds * 60 + 120) * 1000;
+  const timeoutMs = (durationSeconds * 120 + 300) * 1000;
 
   await chmod(binaryPath, 0o755);
   const result = await withTimeout(

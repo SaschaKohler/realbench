@@ -1,6 +1,6 @@
 # RealBench - Implementierungsstatus
 
-**Stand:** 13. April 2026, 19:00 Uhr
+**Stand:** 19. April 2026, 17:30 Uhr
 
 ## ✅ Phase 1 MVP - Fertiggestellt
 
@@ -147,18 +147,62 @@ railbench/
         └── CMakeLists.txt          # CMake Build
 ```
 
+## ⚠️ Bekannte Lücken & offene Punkte
+
+### C++ Profiler
+
+| Problem | Auswirkung | Lösung (SPEC §12-13) |
+|---|---|---|
+| `--call-graph dwarf` für Go-Binaries | Falsche/leere Stacks bei Go | `--call-graph fp` wenn `BinaryRuntime::GO` |
+| Kein Rust-spezifisches Demangling | Manglined Symbole in Flamegraph | `demangle_rust()` in `build_result()` |
+| `-m` (Mmap-Ringpuffer) nicht gesetzt | Sample-Verlust bei langen Läufen | `-m 16M` in `profile_binary_perf()` |
+| Binary-Upload-Limit ~1 MB (Hono default) | Grosse Binaries werden abgelehnt | `bodyLimit(500 MB)` in `index.ts` |
+| Timeout zu knapp für grosse Binaries | `profileBinary` läuft in Timeout | Timeout-Formel anpassen (SPEC §13) |
+
+### Frontend
+
+| Problem | Auswirkung |
+|---|---|
+| Flamegraph nur als externer R2-Link | Kein interaktives Drill-down/Zoom |
+| Kein JSON-Flamegraph-Endpoint | D3-Komponente hat keine Datenquelle |
+| Diff-Seite hat keine UI | API-Route `/runs/:id/diff/:baseId` ungenutzt |
+
 ## 🚀 Nächste Schritte
 
-### Priorität 1: C++ Profiler Testen & Deployen
+### Priorität 1 — C++ Core Fixes (Sofort)
 
-**Build & Verification:**
-1. ✅ C++ Profiler komplett implementiert
-2. Native Addon bauen: `cd lib/profiler && npm install && npm run build`
-3. Tests ausführen: `cd lib/profiler/build && ctest`
-4. API mit echtem Profiler testen
-5. Ersten echten Profiling-Run durchführen
+**`lib/profiler/src/sampler.cpp` — `profile_binary_perf()`:**
+1. `--call-graph` runtime-abhängig: `fp` für Go, `dwarf,65528` für C++/Rust
+2. `-m 16M` Mmap-Ringpuffer für alle Runtimes ergänzen
+3. Rust-Demangling in `build_result()` ergänzen
 
-**System Requirements Check:**
+```bash
+# Nach Änderungen neu bauen:
+cd lib/profiler && npm run build
+cd build && ctest
+```
+
+**`apps/api/src/index.ts`:**
+4. `bodyLimit(500 * 1024 * 1024)` für `/api/v1/profile`
+
+**`apps/api/src/services/profiler.ts`:**
+5. Timeout-Formel: `(durationSeconds * 120 + 300) * 1000`
+
+### Priorität 2 — Interaktiver Flamegraph (Phase 2)
+
+6. `lib/profiler/src/flamegraph.cpp`: JSON-Output auf D3-Hierarchie-Format (`FlameNode`)
+7. `apps/api/src/routes/runs.ts`: `GET /runs/:id/flamegraph.json`
+8. `apps/web/src/components/FlameGraph.tsx`: D3-Komponente (Zoom, Tooltip, Suche, Diff)
+9. `apps/web/src/pages/RunDetail.tsx`: Embedded Flamegraph ersetzen externes SVG-Link
+
+### Priorität 3 — Infrastructure & Scale
+
+10. `fly.worker.toml`: 4 GB RAM + 20 GB tmpdir Volume Mount
+11. Streaming-Parser für `perf script`-Output (Phase 2, kein Disk-Spooling)
+12. GitHub Actions `realbench-action` als YAML-Step
+13. Diff-Visualisierung im UI (DiffChart mit Recharts)
+
+**System Requirements (Worker):**
 ```bash
 # Kernel Version prüfen (>= 2.6.31)
 uname -r
@@ -166,23 +210,9 @@ uname -r
 # perf_event_paranoid setzen
 sudo sysctl kernel.perf_event_paranoid=-1
 
-# Dependencies installieren
-sudo apt-get install libunwind-dev libelf-dev
+# Dependencies
+sudo apt-get install libunwind-dev libelf-dev linux-perf
 ```
-
-### Priorität 2: Frontend Vervollständigen
-
-1. Flamegraph Viewer (SVG Rendering)
-2. Diff-Vergleichsansicht
-3. Trend-Charts (Recharts)
-4. Upload-Flow für Binaries
-5. Error Handling & Loading States
-
-### Priorität 3: Testing
-
-1. API Integration Tests (Vitest)
-2. Frontend Component Tests
-3. E2E Tests (Playwright)
 
 ## 🔑 Wichtige Befehle
 
