@@ -1,0 +1,57 @@
+# Cross-compilation environment for Linux ELF binaries
+# Builds C++ test programs targeting Linux x86_64
+
+FROM ubuntu:24.04 AS crosscompiler
+
+WORKDIR /build
+
+# Install cross-compilation toolchain
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    g++ \
+    g++-x86-64-linux-gnu \
+    gcc \
+    gcc-x86-64-linux-gnu \
+    binutils \
+    make \
+    cmake \
+    file \
+    && rm -rf /var/lib/apt/lists/*
+
+# Verify cross-compiler
+RUN x86_64-linux-gnu-g++ --version
+
+# Copy test source files
+COPY *.cpp ./
+COPY compile_and_test.sh ./
+
+# Create build directory
+RUN mkdir -p build/tests
+
+# Compile CPU intensive test
+RUN x86_64-linux-gnu-g++ -g -O2 -std=c++17 -Wall -Wextra --static cpu_intensive.cpp -o build/tests/cpu_intensive -pthread -static-libgcc -static-libstdc++
+
+# Compile memory allocation test
+RUN x86_64-linux-gnu-g++ -g -O2 -std=c++17 -Wall -Wextra --static memory_allocation.cpp -o build/tests/memory_allocation -pthread -static-libgcc -static-libstdc++
+
+# Compile multithreading test
+RUN x86_64-linux-gnu-g++ -g -O2 -std=c++17 -Wall -Wextra --static multithreading.cpp -o build/tests/multithreading -pthread -static-libgcc -static-libstdc++
+
+# Compile algorithmic complexity test
+RUN x86_64-linux-gnu-g++ -g -O2 -std=c++17 -Wall -Wextra --static algorithmic_complexity.cpp -o build/tests/algorithmic_complexity -pthread -static-libgcc -static-libstdc++
+
+# Verify ELF binaries
+RUN file build/tests/* | grep ELF
+
+# Create minimal runtime image
+FROM alpine:latest AS runtime
+
+# Copy only the compiled binaries
+COPY --from=crosscompiler /build/build/tests /tests
+
+# Set permissions
+RUN chmod +x /tests/*
+
+# Metadata
+LABEL description="Linux ELF test binaries for RealBench profiler"
+LABEL version="1.0"
+LABEL architecture="x86_64-linux"

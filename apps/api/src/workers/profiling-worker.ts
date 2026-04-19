@@ -7,6 +7,7 @@ import { db } from '../db/index.js';
 import { profilingRuns } from '../db/schema.js';
 import { downloadBinary, uploadFlamegraph } from '../services/storage.js';
 import { analyzeProfiling } from '../services/llm.js';
+import { extractSourceSnippets } from '../services/source-extractor.js';
 import { getBoss, PROFILING_QUEUE, ProfilingJobData } from './queue.js';
 import { profileBinary } from '../services/profiler.js';
 
@@ -58,6 +59,19 @@ async function processProfilingJob(data: ProfilingJobData, markJobDone: () => Pr
       throw new Error('Project not found');
     }
 
+    // Extract source code snippets for hotspots that have file/line info
+    console.log(`Extracting source snippets for ${hotspots.length} hotspots...`);
+    const sourceSnippets = await extractSourceSnippets(
+      hotspots,
+      projectResult.language,
+      {
+        sourceRoots: [tmpdir(), process.cwd(), process.env.SOURCE_ROOT || '/app/source'],
+        contextLines: 8,
+        maxFileSize: 1024 * 1024,
+      }
+    );
+    console.log(`Extracted ${sourceSnippets.length} source snippets`);
+
     const analysis = await analyzeProfiling(
       {
         id: runId,
@@ -76,7 +90,9 @@ async function processProfilingJob(data: ProfilingJobData, markJobDone: () => Pr
         projectName: projectResult.name,
         language: projectResult.language,
       },
-      undefined
+      undefined,
+      undefined,
+      sourceSnippets
     );
 
     await db

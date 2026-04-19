@@ -29,9 +29,11 @@ static std::string demangle_rust(const std::string& mangled) {
     return mangled;
   }
   
-  // Try to use rustc-demangle tool if available
+  // Try to use rustc --print demangle if available
   std::vector<std::string> cmd;
-  cmd.push_back("rustc-demangle");
+  cmd.push_back("rustc");
+  cmd.push_back("--print");
+  cmd.push_back("demangle");
   cmd.push_back(mangled);
   
   std::vector<char*> c_argv;
@@ -55,7 +57,7 @@ static std::string demangle_rust(const std::string& mangled) {
     dup2(pipefd[1], STDOUT_FILENO);
     close(pipefd[1]);
     execvp(c_argv[0], c_argv.data());
-    _exit(127); // rustc-demangle not found
+    _exit(127); // rustc not found
   }
   
   close(pipefd[1]);
@@ -72,7 +74,7 @@ static std::string demangle_rust(const std::string& mangled) {
   waitpid(child, &status, 0);
   int rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
   
-  // If rustc-demangle succeeded and produced output, use it
+  // If rustc demangle succeeded and produced output, use it
   if (rc == 0 && !output.empty()) {
     // Remove trailing newline
     if (!output.empty() && output.back() == '\n')

@@ -1,21 +1,25 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { ProfilingRun, LLMAnalysis, LLMAnalysisSchema, Hotspot, DiffEntry } from '@realbench/shared';
+import { SourceSnippet, isTestFile } from './source-extractor.js';
 
 const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
 });
 
 const SYSTEM_PROMPT = `You are a performance engineering assistant specializing in C++, Rust, and Go profiling.
-You receive structured flamegraph data and return actionable optimization suggestions in JSON.
+You receive structured flamegraph data with optional source code context and return actionable optimization suggestions in JSON.
 
-Rules:
-- Your entire response MUST be a single valid JSON object. Start with { and end with }.
-- Do NOT wrap the output in markdown code fences, backticks, or any prose.
-- Rank suggestions by estimated impact (high/medium/low)
-- Be concrete: name the exact function, file, and line if available
-- Suggest a fix, not just a diagnosis
-- Max 5 suggestions per analysis
-- If the diff shows a regression, flag it explicitly`;
+CRITICAL RULES:
+1. Your entire response MUST be a single valid JSON object. Start with { and end with }.
+2. Do NOT wrap the output in markdown code fences, backticks, or any prose.
+3. Only suggest fixes for CLEAR anti-patterns. When in doubt, omit the suggestion.
+4. For test/benchmark files (file path contains "test", "spec", "bench"): Only flag issues if they're clearly unintentional performance bugs.
+5. Sequential memory access patterns are NORMAL for memory-bound workloads - do NOT flag as problematic.
+6. Debug build overhead (memset from debug allocators, additional checks) should NOT be flagged as optimization targets.
+7. Be concrete: name the exact function, file, and line.
+8. Provide realistic speedup estimates only when you understand the bottleneck category.
+9. Max 5 suggestions per analysis.
+10. If the diff shows a regression, flag it explicitly.`;
 
 interface BuildPromptParams {
   projectName: string;
@@ -26,10 +30,29 @@ interface BuildPromptParams {
   hotspots: Hotspot[];
   diff?: DiffEntry[];
   constraints?: string;
+  sourceSnippets?: SourceSnippet[];
 }
 
 function buildPrompt(params: BuildPromptParams): string {
-  const { projectName, language, commitSha, branch, buildType, hotspots, diff, constraints } = params;
+  const { projectName, language, commitSha, branch, buildType, hotspots, diff, constraints, sourceSnippets } = params;
+
+  // Build hotspots with source context
+  const hotspotsWithContext = hotspots.map((h, i) => {
+    const snippet = sourceSnippets?.find(s => s.symbol === h.symbol && s.file === h.file);
+    const testFileIndicator = (h.file && isTestFile(h.file)) ? ' [TEST FILE]' : '';
+
+    return {
+      rank: i + 1,
+      symbol: h.symbol,
+      file: h.file || 'unknown',
+      line: h.line || 0,
+      selfPercentage: h.selfPct,
+      totalPercentage: h.totalPct,
+      callCount: h.callCount,
+      isTestFile: !!testFileIndicator,
+      sourceContext: snippet ? snippet.context : null,
+    };
+  });
 
   return `
 Analyze this profiling run and return optimization suggestions.
@@ -40,9 +63,10 @@ Analyze this profiling run and return optimization suggestions.
 - Commit: ${commitSha}
 - Branch: ${branch}
 - Build type: ${buildType}
+- Source snippets available: ${sourceSnippets?.length || 0}
 
-## Top hotspots (sorted by % CPU)
-${JSON.stringify(hotspots, null, 2)}
+## Hotspots with Source Context (sorted by % CPU)
+${JSON.stringify(hotspotsWithContext, null, 2)}
 
 ${diff ? `## Flamegraph diff vs. baseline\n${JSON.stringify(diff, null, 2)}` : ''}
 
@@ -71,7 +95,8 @@ Respond with a JSON object matching this structure exactly:
 export async function analyzeProfiling(
   run: ProfilingRun & { projectName: string; language: string },
   baseline?: ProfilingRun,
-  constraints?: string
+  constraints?: string,
+  sourceSnippets?: SourceSnippet[]
 ): Promise<LLMAnalysis> {
   const hotspots = (run.hotspots as Hotspot[]) || [];
   const diff = baseline ? (baseline.hotspots as DiffEntry[]) : undefined;
@@ -85,6 +110,7 @@ export async function analyzeProfiling(
     hotspots,
     diff,
     constraints,
+    sourceSnippets,
   });
 
   const response = await client.messages.create({
