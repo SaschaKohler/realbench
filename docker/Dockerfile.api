@@ -1,0 +1,58 @@
+# RealBench API Server
+# Multi-stage Build für optimale Image-Größe
+
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# pnpm installieren
+RUN npm install -g pnpm
+
+# Root-Dependencies
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/api/package.json ./apps/api/
+COPY packages/shared/package.json ./packages/shared/
+
+# Installieren
+RUN pnpm install --frozen-lockfile
+
+# Root tsconfig (extended by workspace packages)
+COPY tsconfig.json ./
+
+# Source Code
+COPY packages/shared ./packages/shared
+COPY apps/api ./apps/api
+
+# Shared bauen
+RUN pnpm --filter @realbench/shared build
+
+# API bauen
+RUN pnpm --filter @realbench/api build
+
+# Production Image
+FROM node:20-alpine AS production
+
+WORKDIR /app
+
+# node_modules aus Builder übernehmen (workspace dependencies können nicht neu installiert werden)
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/apps/api/node_modules ./apps/api/node_modules
+COPY --from=builder /app/packages/shared/node_modules ./packages/shared/node_modules
+
+# Built artifacts kopieren
+COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
+COPY --from=builder /app/apps/api/dist ./apps/api/dist
+
+# package.json für Node module resolution
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/apps/api/package.json ./apps/api/
+COPY --from=builder /app/packages/shared/package.json ./packages/shared/
+
+# Non-root user
+USER node
+
+EXPOSE 3000
+
+WORKDIR /app/apps/api
+
+CMD ["node", "dist/index.js"]

@@ -1,0 +1,27 @@
+# RealBench Worker - Fly.io Configuration
+app = "realbench-worker"
+primary_region = "fra"
+
+[build]
+  dockerfile = "docker/Dockerfile.worker"
+
+# Worker needs no HTTP service, just runs continuously
+[processes]
+  app = "node dist/workers/profiling-worker.js"
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[env]
+  NODE_ENV = "production"
+
+# Secrets (set via: fly secrets set KEY=VALUE)
+# DATABASE_URL
+# CLERK_SECRET_KEY
+# AWS_ACCESS_KEY_ID
+# AWS_SECRET_ACCESS_KEY
+# AWS_REGION
+# AWS_BUCKET_NAME
+# ANTHROPIC_API_KEY

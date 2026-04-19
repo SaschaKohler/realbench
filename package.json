@@ -1,0 +1,29 @@
+{
+  "name": "realbench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Performance Profiling as a Service for C++, Rust, and Go projects",
+  "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/*\" dev",
+    "build": "pnpm --filter \"./packages/*\" build && pnpm --filter \"./apps/*\" build",
+    "test": "pnpm --recursive test",
+    "lint": "pnpm --recursive lint",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "db:generate": "pnpm --filter api db:generate",
+    "db:push": "pnpm --filter api db:push",
+    "db:migrate": "pnpm --filter api db:migrate"
+  },
+  "keywords": ["profiling", "performance", "c++", "rust", "go", "flamegraph"],
+  "author": "",
+  "license": "MIT",
+  "packageManager": "pnpm@8.15.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.19",
+    "prettier": "^3.2.5",
+    "typescript": "^5.3.3"
+  }
+}

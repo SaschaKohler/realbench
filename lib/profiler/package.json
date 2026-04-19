@@ -1,0 +1,23 @@
+{
+  "name": "@realbench/profiler-native",
+  "version": "0.1.0",
+  "description": "Native C++ profiler for RealBench",
+  "main": "index.js",
+  "scripts": {
+    "install": "node-gyp rebuild",
+    "build": "node-gyp rebuild",
+    "clean": "node-gyp clean"
+  },
+  "gypfile": true,
+  "dependencies": {
+    "node-addon-api": "^8.0.0",
+    "node-gyp": "^10.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "os": [
+    "linux",
+    "darwin"
+  ]
+}

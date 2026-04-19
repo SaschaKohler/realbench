@@ -1,0 +1,31 @@
+node_modules
+dist
+build
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+coverage
+.turbo
+*.tsbuildinfo
+
+# C++ Build artifacts
+build/
+cmake-build-*/
+*.o
+*.so
+*.a
+*.dylib
+*.node
+compile_commands.json
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmakeuild/
+cmake-build-*/
+.vscode/
+.idea/
+
+# Kubernetes configuration
+k8s/

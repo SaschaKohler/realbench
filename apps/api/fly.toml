@@ -1,0 +1,40 @@
+# RealBench API - Fly.io Configuration
+app = "realbench-api"
+primary_region = "fra"
+
+[build]
+  dockerfile = "docker/Dockerfile.api"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+
+# Secrets (set via: fly secrets set KEY=VALUE)
+# DATABASE_URL
+# CLERK_SECRET_KEY
+# CLERK_PUBLISHABLE_KEY
+# AWS_ACCESS_KEY_ID
+# AWS_SECRET_ACCESS_KEY
+# AWS_REGION
+# AWS_BUCKET_NAME
+# ANTHROPIC_API_KEY

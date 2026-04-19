@@ -1,0 +1,4 @@
+apps/api/dist
+**/node_modules
+**/.env
+**/.env.local
