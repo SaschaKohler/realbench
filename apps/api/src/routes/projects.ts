@@ -41,28 +41,6 @@ app.post('/', authMiddleware, validateBody(CreateProjectSchema), async (c) => {
   return c.json({ project });
 });
 
-app.get('/:id/runs', authMiddleware, async (c) => {
-  const clerkId = c.get('clerkId');
-  const projectId = c.req.param('id') as string;
-
-  const user = await getOrCreateUser(clerkId);
-
-  const project = await db.query.projects.findFirst({
-    where: (projects, { eq }) => eq(projects.id, projectId),
-  });
-
-  if (!project || project.userId !== user.id) {
-    return c.json({ error: 'Project not found or access denied' }, 404);
-  }
-
-  const runs = await db.query.profilingRuns.findMany({
-    where: (profilingRuns, { eq }) => eq(profilingRuns.projectId, projectId),
-    orderBy: (profilingRuns, { desc }) => [desc(profilingRuns.createdAt)],
-  });
-
-  return c.json({ runs });
-});
-
 app.get('/:id', authMiddleware, async (c) => {
   const clerkId = c.get('clerkId');
   const projectId = c.req.param('id') as string;
@@ -125,6 +103,29 @@ app.delete('/:id', authMiddleware, async (c) => {
   await db.delete(projects).where(eq(projects.id, projectId));
 
   return c.json({ success: true, message: 'Project deleted' });
+});
+
+// This route must come after all other /:id routes to avoid conflicts
+app.get('/:id/runs', authMiddleware, async (c) => {
+  const clerkId = c.get('clerkId');
+  const projectId = c.req.param('id') as string;
+
+  const user = await getOrCreateUser(clerkId);
+
+  const project = await db.query.projects.findFirst({
+    where: eq(projects.id, projectId),
+  });
+
+  if (!project || project.userId !== user.id) {
+    return c.json({ error: 'Project not found or access denied' }, 404);
+  }
+
+  const runs = await db.query.profilingRuns.findMany({
+    where: eq(profilingRuns.projectId, projectId),
+    orderBy: (profilingRuns, { desc }) => [desc(profilingRuns.createdAt)],
+  });
+
+  return c.json({ runs });
 });
 
 export default app;
