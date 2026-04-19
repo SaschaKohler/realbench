@@ -32,6 +32,9 @@ RUN pnpm --filter @realbench/api build
 # Production Image
 FROM node:20-alpine AS production
 
+# Install binutils for binary analysis (readelf, nm, strings)
+RUN apk add --no-cache binutils
+
 WORKDIR /app
 
 # node_modules aus Builder übernehmen (workspace dependencies können nicht neu installiert werden)
