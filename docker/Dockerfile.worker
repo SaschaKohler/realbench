@@ -69,6 +69,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libelf1 \
     libdw1 \
     libunwind8 \
+    binutils \
     && rm -rf /var/lib/apt/lists/*
 
 # perf_event_paranoid auf 1 setzen wird im Container über Fly-Capabilities erledigt;
