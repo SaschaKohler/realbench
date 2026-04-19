@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { useProjectRuns, useProfileBinary } from '../lib/api';
+import { Link, useParams, useNavigate } from 'react-router-dom';
+import { useProject, useProjectRuns, useProfileBinary, useUpdateProject, useDeleteRun } from '../lib/api';
 
 const ESTIMATED_DURATION_MS = 45_000;
 
@@ -32,14 +32,44 @@ function ElapsedProgressBar({ createdAt, status }: { createdAt: string; status: 
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { data: projectData } = useProject(id!);
   const { data, isLoading } = useProjectRuns(id!);
   const { mutate: uploadBinary, isPending: isUploading, isSuccess, error } = useProfileBinary();
+  const updateProject = useUpdateProject();
+  const deleteRun = useDeleteRun();
 
   const [commitSha, setCommitSha] = useState('');
   const [branch, setBranch] = useState('main');
   const [buildType, setBuildType] = useState<'release' | 'debug'>('release');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Edit project state
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editName, setEditName] = useState('');
+
+  // Delete run state
+  const [runToDelete, setRunToDelete] = useState<string | null>(null);
+
+  const handleUpdateName = async () => {
+    if (editName.trim() && id) {
+      await updateProject.mutateAsync({ projectId: id, name: editName.trim() });
+      setIsEditingName(false);
+    }
+  };
+
+  const handleDeleteRun = async () => {
+    if (runToDelete) {
+      await deleteRun.mutateAsync(runToDelete);
+      setRunToDelete(null);
+    }
+  };
+
+  const startEditingName = () => {
+    setEditName(projectData?.project?.name || '');
+    setIsEditingName(true);
+  };
 
   const handleUpload = (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,6 +96,76 @@ export default function ProjectDetail() {
       </nav>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Project Header with Edit */}
+        <div className="mb-8">
+          {isEditingName ? (
+            <div className="flex items-center gap-3">
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="text-3xl font-bold bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white"
+                autoFocus
+              />
+              <button
+                onClick={handleUpdateName}
+                disabled={updateProject.isPending}
+                className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-600"
+              >
+                Save
+              </button>
+              <button
+                onClick={() => setIsEditingName(false)}
+                className="px-3 py-2 bg-gray-700 text-white rounded hover:bg-gray-600"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold text-white">{projectData?.project?.name || 'Project'}</h1>
+              <button
+                onClick={startEditingName}
+                className="p-2 text-gray-400 hover:text-white opacity-0 hover:opacity-100 transition"
+                title="Edit project name"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                </svg>
+              </button>
+            </div>
+          )}
+          <p className="text-gray-400 mt-1">
+            {projectData?.project?.language?.toUpperCase() || ''}
+          </p>
+        </div>
+
+        {/* Delete Run Confirmation Modal */}
+        {runToDelete && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+              <h3 className="text-xl font-semibold mb-4">Delete Run</h3>
+              <p className="text-gray-300 mb-6">
+                Are you sure you want to delete this profiling run? This action cannot be undone.
+              </p>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setRunToDelete(null)}
+                  className="px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDeleteRun}
+                  disabled={deleteRun.isPending}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-600"
+                >
+                  {deleteRun.isPending ? 'Deleting...' : 'Delete'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Upload Form */}
         <div className="bg-gray-800 rounded-lg p-6 mb-8">
@@ -152,21 +252,39 @@ export default function ProjectDetail() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
                     Created
                   </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="bg-gray-800 divide-y divide-gray-700">
                 {data?.runs?.map((run: any) => (
                   <tr
                     key={run.id}
-                    className="hover:bg-gray-750 cursor-pointer"
-                    onClick={() => (window.location.href = `/runs/${run.id}`)}
+                    className="hover:bg-gray-750 group"
                   >
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-mono">
+                    <td
+                      className="px-6 py-4 whitespace-nowrap text-sm font-mono cursor-pointer"
+                      onClick={() => navigate(`/runs/${run.id}`)}
+                    >
                       {run.commitSha.substring(0, 8)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">{run.branch}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">{run.buildType}</td>
-                    <td className="px-6 py-4">
+                    <td
+                      className="px-6 py-4 whitespace-nowrap text-sm cursor-pointer"
+                      onClick={() => navigate(`/runs/${run.id}`)}
+                    >
+                      {run.branch}
+                    </td>
+                    <td
+                      className="px-6 py-4 whitespace-nowrap text-sm cursor-pointer"
+                      onClick={() => navigate(`/runs/${run.id}`)}
+                    >
+                      {run.buildType}
+                    </td>
+                    <td
+                      className="px-6 py-4 cursor-pointer"
+                      onClick={() => navigate(`/runs/${run.id}`)}
+                    >
                       <span
                         className={`px-2 py-1 text-xs rounded-full ${
                           run.status === 'done'
@@ -184,8 +302,25 @@ export default function ProjectDetail() {
                         <ElapsedProgressBar createdAt={run.createdAt} status={run.status} />
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">
+                    <td
+                      className="px-6 py-4 whitespace-nowrap text-sm text-gray-400 cursor-pointer"
+                      onClick={() => navigate(`/runs/${run.id}`)}
+                    >
                       {new Date(run.createdAt).toLocaleString()}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRunToDelete(run.id);
+                        }}
+                        className="p-2 text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100 transition"
+                        title="Delete run"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                      </button>
                     </td>
                   </tr>
                 ))}

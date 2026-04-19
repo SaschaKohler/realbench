@@ -67,3 +67,8 @@ export const CreateProjectSchema = z.object({
   language: LanguageSchema,
 });
 export type CreateProjectRequest = z.infer<typeof CreateProjectSchema>;
+
+export const UpdateProjectSchema = z.object({
+  name: z.string().min(1).max(255),
+});
+export type UpdateProjectRequest = z.infer<typeof UpdateProjectSchema>;

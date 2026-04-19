@@ -1,16 +1,25 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { UserButton } from '@clerk/clerk-react';
-import { useProjects, useCreateProject } from '../lib/api';
+import { useProjects, useCreateProject, useDeleteProject } from '../lib/api';
 
 export default function Dashboard() {
   const { data, isLoading } = useProjects();
   const createProject = useCreateProject();
+  const deleteProject = useDeleteProject();
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     language: 'cpp',
   });
+
+  const handleDelete = async () => {
+    if (projectToDelete) {
+      await deleteProject.mutateAsync(projectToDelete);
+      setProjectToDelete(null);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,21 +98,61 @@ export default function Dashboard() {
           </div>
         )}
 
+        {projectToDelete && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+              <h3 className="text-xl font-semibold mb-4">Delete Project</h3>
+              <p className="text-gray-300 mb-6">
+                Are you sure you want to delete this project? This will also delete all associated runs. This action cannot be undone.
+              </p>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setProjectToDelete(null)}
+                  className="px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDelete}
+                  disabled={deleteProject.isPending}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-600"
+                >
+                  {deleteProject.isPending ? 'Deleting...' : 'Delete'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {isLoading ? (
           <div className="text-center py-12">Loading...</div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {data?.projects?.map((project: any) => (
-              <Link
+              <div
                 key={project.id}
-                to={`/projects/${project.id}`}
-                className="block bg-gray-800 rounded-lg p-6 hover:bg-gray-750 transition"
+                className="block bg-gray-800 rounded-lg p-6 hover:bg-gray-750 transition group relative"
               >
-                <h3 className="text-xl font-semibold mb-2">{project.name}</h3>
-                <span className="inline-block px-3 py-1 bg-gray-700 text-sm rounded-full">
-                  {project.language.toUpperCase()}
-                </span>
-              </Link>
+                <Link to={`/projects/${project.id}`} className="block">
+                  <h3 className="text-xl font-semibold mb-2">{project.name}</h3>
+                  <span className="inline-block px-3 py-1 bg-gray-700 text-sm rounded-full">
+                    {project.language.toUpperCase()}
+                  </span>
+                </Link>
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setProjectToDelete(project.id);
+                  }}
+                  className="absolute top-4 right-4 p-2 text-gray-400 hover:text-red-400 opacity-0 group-hover:opacity-100 transition"
+                  title="Delete project"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                </button>
+              </div>
             ))}
           </div>
         )}

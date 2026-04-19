@@ -52,6 +52,55 @@ export function useCreateProject() {
   });
 }
 
+export function useProject(projectId: string) {
+  const { getToken } = useAuth();
+
+  return useQuery({
+    queryKey: ['projects', projectId],
+    queryFn: async () => {
+      const token = await getToken();
+      return fetchWithAuth(`/api/v1/projects/${projectId}`, token);
+    },
+    enabled: !!projectId,
+  });
+}
+
+export function useUpdateProject() {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ projectId, name }: { projectId: string; name: string }) => {
+      const token = await getToken();
+      return fetchWithAuth(`/api/v1/projects/${projectId}`, token, {
+        method: 'PATCH',
+        body: JSON.stringify({ name }),
+      });
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['projects', variables.projectId] });
+    },
+  });
+}
+
+export function useDeleteProject() {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (projectId: string) => {
+      const token = await getToken();
+      return fetchWithAuth(`/api/v1/projects/${projectId}`, token, {
+        method: 'DELETE',
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+    },
+  });
+}
+
 export function useProjectRuns(projectId: string) {
   const { getToken } = useAuth();
 
@@ -83,6 +132,24 @@ export function useRun(runId: string) {
     refetchInterval: (query) => {
       const status = query.state.data?.run?.status;
       return status === 'pending' || status === 'processing' ? 3000 : false;
+    },
+  });
+}
+
+export function useDeleteRun() {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (runId: string) => {
+      const token = await getToken();
+      return fetchWithAuth(`/api/v1/runs/${runId}`, token, {
+        method: 'DELETE',
+      });
+    },
+    onSuccess: () => {
+      // Invalidate all project runs queries
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
     },
   });
 }

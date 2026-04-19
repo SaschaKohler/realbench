@@ -1,7 +1,10 @@
 import { Hono } from 'hono';
 import type { Variables } from '../types.js';
 import { db } from '../db/index.js';
+import { profilingRuns } from '../db/schema.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { getOrCreateUser } from '../services/user.js';
+import { eq } from 'drizzle-orm';
 
 const app = new Hono<{ Variables: Variables }>();
 
@@ -61,6 +64,33 @@ app.get('/:id/diff/:baseId', authMiddleware, async (c) => {
     current: currentRun,
     baseline: baselineRun,
   });
+});
+
+app.delete('/:id', authMiddleware, async (c) => {
+  const clerkId = c.get('clerkId');
+  const runId = c.req.param('id') as string;
+
+  const user = await getOrCreateUser(clerkId);
+
+  // Find run with project to verify ownership
+  const run = await db.query.profilingRuns.findFirst({
+    where: eq(profilingRuns.id, runId),
+    with: {
+      project: true,
+    },
+  });
+
+  if (!run) {
+    return c.json({ error: 'Run not found' }, 404);
+  }
+
+  if (run.project.userId !== user.id) {
+    return c.json({ error: 'Access denied' }, 403);
+  }
+
+  await db.delete(profilingRuns).where(eq(profilingRuns.id, runId));
+
+  return c.json({ success: true, message: 'Run deleted' });
 });
 
 export default app;
