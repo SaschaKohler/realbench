@@ -113,10 +113,12 @@ async function startWorker() {
     for (const job of jobs) {
       const jobId = (job as any).id;
       console.log(`Processing job ${jobId}`);
-      // Job sofort bestätigen, dann asynchron verarbeiten
-      await processProfilingJob(job.data, async () => {
+      // Job sofort bestätigen, dann asynchron verarbeiten (fire-and-forget)
+      processProfilingJob(job.data, async () => {
         // Job sofort als erledigt markieren - Profiling läuft im Hintergrund
         await boss!.complete(PROFILING_QUEUE, jobId);
+      }).catch(err => {
+        console.error(`Background processing failed for job ${jobId}:`, err);
       });
       console.log(`Job ${jobId} acknowledged, processing continues in background`);
     }
