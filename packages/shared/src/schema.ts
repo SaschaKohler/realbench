@@ -35,6 +35,20 @@ export const profilingRuns = pgTable('profiling_runs', {
   durationMs: integer('duration_ms'),
   error: text('error'),
   createdAt: timestamp('created_at').defaultNow(),
+  
+  // P0: perf stat mode fields
+  profilingMode: text('profiling_mode').default('sampling'), // 'sampling' | 'stat'
+  isStatMode: boolean('is_stat_mode').default(false),
+  timeElapsedSeconds: integer('time_elapsed_seconds'),
+  cpuUtilizationPercent: integer('cpu_utilization_percent'),
+  
+  // P0/P1: Hardware counter results (stored as JSON array)
+  counters: jsonb('counters'), // Array of {name, value, unitRatio, unitName, comment}
+  
+  // P1b: Context switch tracing results
+  hasContextSwitchData: boolean('has_context_switch_data').default(false),
+  contextSwitchStats: jsonb('context_switch_stats'), // {totalSwitches, voluntarySwitches, involuntarySwitches, migrations, avgSwitchIntervalMs, uniqueThreads, mostActiveThread}
+  contextSwitches: jsonb('context_switches'), // Array of context switch events (truncated if too large)
 });
 
 export const usersRelations = relations(users, ({ many }) => ({

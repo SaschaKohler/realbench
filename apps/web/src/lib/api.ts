@@ -154,6 +154,45 @@ export function useDeleteRun() {
   });
 }
 
+export interface ProfilingOptionsInput {
+  mode?: 'sampling' | 'stat';
+  statDetailed?: boolean;
+  hwCounters?: {
+    cycles?: boolean;
+    instructions?: boolean;
+    cacheReferences?: boolean;
+    cacheMisses?: boolean;
+    branchInstructions?: boolean;
+    branchMisses?: boolean;
+    stalledCyclesFrontend?: boolean;
+    stalledCyclesBackend?: boolean;
+    contextSwitches?: boolean;
+    cpuMigrations?: boolean;
+    pageFaults?: boolean;
+    l1DcacheLoads?: boolean;
+    l1DcacheLoadMisses?: boolean;
+    l1DcacheStores?: boolean;
+    l1DcacheStoreMisses?: boolean;
+    l1IcacheLoads?: boolean;
+    l1IcacheLoadMisses?: boolean;
+    llcLoads?: boolean;
+    llcLoadMisses?: boolean;
+    llcStores?: boolean;
+    llcStoreMisses?: boolean;
+    dtlbLoads?: boolean;
+    dtlbLoadMisses?: boolean;
+    dtlbStores?: boolean;
+    dtlbStoreMisses?: boolean;
+    itlbLoads?: boolean;
+    itlbLoadMisses?: boolean;
+    custom?: string[];
+  };
+  traceContextSwitches?: boolean;
+  durationSeconds?: number;
+  frequencyHz?: number;
+  includeKernel?: boolean;
+}
+
 export function useProfileBinary() {
   const { getToken } = useAuth();
   const queryClient = useQueryClient();
@@ -165,6 +204,7 @@ export function useProfileBinary() {
       branch: string;
       buildType: string;
       binary: File;
+      profilingOptions?: ProfilingOptionsInput;
     }) => {
       const token = await getToken();
       const formData = new FormData();
@@ -174,6 +214,11 @@ export function useProfileBinary() {
       formData.append('branch', data.branch);
       formData.append('buildType', data.buildType);
       formData.append('binaryName', data.binary.name);
+      
+      // P0/P1/P1b: Add profiling options if provided
+      if (data.profilingOptions) {
+        formData.append('profilingOptions', JSON.stringify(data.profilingOptions));
+      }
 
       return fetch(`${API_URL}/api/v1/profile`, {
         method: 'POST',
