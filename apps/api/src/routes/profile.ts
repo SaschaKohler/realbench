@@ -21,12 +21,24 @@ app.post('/', authMiddleware, async (c) => {
     return c.json({ error: 'Binary file is required' }, 400);
   }
 
+  // Parse profiling options from form data
+  const profilingOptionsJson = formData.get('profilingOptions') as string;
+  let profilingOptions = undefined;
+  if (profilingOptionsJson) {
+    try {
+      profilingOptions = JSON.parse(profilingOptionsJson);
+    } catch (e) {
+      return c.json({ error: 'Invalid profilingOptions JSON' }, 400);
+    }
+  }
+
   const parsed = ProfileRequestSchema.safeParse({
     projectId: formData.get('projectId'),
     commitSha: formData.get('commitSha'),
     branch: formData.get('branch'),
     buildType: formData.get('buildType'),
     binaryName: formData.get('binaryName') || binaryFile.name,
+    profilingOptions,
   });
 
   if (!parsed.success) {
@@ -72,6 +84,8 @@ app.post('/', authMiddleware, async (c) => {
     commitSha: data.commitSha,
     branch: data.branch,
     buildType: data.buildType,
+    // P0/P1/P1b: Pass profiling options
+    profilingOptions: data.profilingOptions,
   });
 
   const response: Record<string, unknown> = {

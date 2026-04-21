@@ -6,10 +6,83 @@ import { join, dirname } from 'path';
 const require = createRequire(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+interface HardwareCounters {
+  cycles?: boolean;
+  instructions?: boolean;
+  cacheReferences?: boolean;
+  cacheMisses?: boolean;
+  branchInstructions?: boolean;
+  branchMisses?: boolean;
+  stalledCyclesFrontend?: boolean;
+  stalledCyclesBackend?: boolean;
+  contextSwitches?: boolean;
+  cpuMigrations?: boolean;
+  pageFaults?: boolean;
+  l1DcacheLoads?: boolean;
+  l1DcacheLoadMisses?: boolean;
+  l1DcacheStores?: boolean;
+  l1DcacheStoreMisses?: boolean;
+  l1IcacheLoads?: boolean;
+  l1IcacheLoadMisses?: boolean;
+  llcLoads?: boolean;
+  llcLoadMisses?: boolean;
+  llcStores?: boolean;
+  llcStoreMisses?: boolean;
+  dtlbLoads?: boolean;
+  dtlbLoadMisses?: boolean;
+  dtlbStores?: boolean;
+  dtlbStoreMisses?: boolean;
+  itlbLoads?: boolean;
+  itlbLoadMisses?: boolean;
+  custom?: string[];
+}
+
 interface ProfilerOptions {
   durationSeconds?: number;
   frequencyHz?: number;
   includeKernel?: boolean;
+  // P0: perf stat mode
+  mode?: 'sampling' | 'stat';
+  statDetailed?: boolean;
+  hwCounters?: HardwareCounters;
+  // P1b: context switch tracing
+  traceContextSwitches?: boolean;
+}
+
+interface CounterResult {
+  name: string;
+  value: number;
+  unitRatio: number;
+  unitName: string;
+  comment: string;
+}
+
+interface ContextSwitchStats {
+  totalSwitches: number;
+  voluntarySwitches: number;
+  involuntarySwitches: number;
+  migrations: number;
+  avgSwitchIntervalMs: number;
+  uniqueThreads: number;
+  mostActiveThread: number;
+}
+
+interface ContextSwitchEvent {
+  timestampMs: number;
+  cpu: number;
+  prevPid: number;
+  nextPid: number;
+  prevComm: string;
+  nextComm: string;
+  isWakeup: boolean;
+  stack?: StackFrame[];
+}
+
+interface StackFrame {
+  symbol: string;
+  file: string;
+  address: number;
+  line: number;
 }
 
 interface Hotspot {
@@ -31,6 +104,16 @@ interface ProfileResult {
   commitSha: string;
   exitCode: number;
   errorMessage: string;
+  // P0: perf stat mode results
+  isStatMode?: boolean;
+  timeElapsedSeconds?: number;
+  cpuUtilizationPercent?: number;
+  // P0/P1: Hardware counter results
+  counters?: CounterResult[];
+  // P1b: Context switch tracing
+  hasContextSwitchData?: boolean;
+  contextSwitchStats?: ContextSwitchStats;
+  contextSwitches?: ContextSwitchEvent[];
 }
 
 let profilerNative: any = null;
@@ -71,11 +154,30 @@ export async function profileBinary(
     return createMockProfileResult(binaryPath);
   }
 
-  const profiler = new ProfilerClient({
+  // Build profiler options
+  const profilerOptions: any = {
     durationSeconds: options.durationSeconds || 30,
     frequencyHz: options.frequencyHz || 99,
     includeKernel: options.includeKernel || false,
-  });
+  };
+  
+  // P0: perf stat mode options
+  if (options.mode) {
+    profilerOptions.mode = options.mode;
+  }
+  if (options.statDetailed) {
+    profilerOptions.statDetailed = options.statDetailed;
+  }
+  if (options.hwCounters) {
+    profilerOptions.hwCounters = options.hwCounters;
+  }
+  
+  // P1b: Context switch tracing
+  if (options.traceContextSwitches) {
+    profilerOptions.traceContextSwitches = options.traceContextSwitches;
+  }
+
+  const profiler = new ProfilerClient(profilerOptions);
 
   // Timeout formula adjusted for large binaries (SPEC §13)
   const durationSeconds = options.durationSeconds || 30;
@@ -100,11 +202,30 @@ export async function profilePid(
     throw new Error('Native profiler not available');
   }
 
-  const profiler = new ProfilerClient({
+  // Build profiler options
+  const profilerOptions: any = {
     durationSeconds: options.durationSeconds || 30,
     frequencyHz: options.frequencyHz || 99,
     includeKernel: options.includeKernel || false,
-  });
+  };
+  
+  // P0: perf stat mode options
+  if (options.mode) {
+    profilerOptions.mode = options.mode;
+  }
+  if (options.statDetailed) {
+    profilerOptions.statDetailed = options.statDetailed;
+  }
+  if (options.hwCounters) {
+    profilerOptions.hwCounters = options.hwCounters;
+  }
+  
+  // P1b: Context switch tracing
+  if (options.traceContextSwitches) {
+    profilerOptions.traceContextSwitches = options.traceContextSwitches;
+  }
+
+  const profiler = new ProfilerClient(profilerOptions);
 
   try {
     const result = await profiler.profilePid(pid);
