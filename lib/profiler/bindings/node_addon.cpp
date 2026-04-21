@@ -28,6 +28,7 @@ public:
         if (info.Length() > 0 && info[0].IsObject()) {
             Object opts = info[0].As<Object>();
             
+            // Basic options
             if (opts.Has("frequencyHz")) {
                 config.frequency_hz = opts.Get("frequencyHz").As<Number>().Uint32Value();
             }
@@ -37,9 +38,84 @@ public:
             if (opts.Has("includeKernel")) {
                 config.include_kernel = opts.Get("includeKernel").As<Boolean>().Value();
             }
+            
+            // P0: perf stat mode options
+            if (opts.Has("mode")) {
+                std::string mode = opts.Get("mode").As<String>().Utf8Value();
+                if (mode == "stat") {
+                    config.mode = ProfileMode::STAT;
+                } else {
+                    config.mode = ProfileMode::SAMPLING;
+                }
+            }
+            if (opts.Has("statDetailed")) {
+                config.stat_detailed = opts.Get("statDetailed").As<Boolean>().Value();
+            }
+            
+            // P0/P1: Hardware counter configuration
+            if (opts.Has("hwCounters") && opts.Get("hwCounters").IsObject()) {
+                Object hw = opts.Get("hwCounters").As<Object>();
+                ParseHardwareCounters(hw, config.hw_counters);
+            }
+            
+            // P1b: Context switch tracing
+            if (opts.Has("traceContextSwitches")) {
+                config.trace_context_switches = opts.Get("traceContextSwitches").As<Boolean>().Value();
+            }
         }
         
         profiler_ = std::make_unique<Profiler>(config);
+    }
+
+    static void ParseHardwareCounters(Object& hw, HardwareCounters& counters) {
+        // Basic counters
+        if (hw.Has("cycles")) counters.cycles = hw.Get("cycles").As<Boolean>().Value();
+        if (hw.Has("instructions")) counters.instructions = hw.Get("instructions").As<Boolean>().Value();
+        if (hw.Has("cacheReferences")) counters.cache_references = hw.Get("cacheReferences").As<Boolean>().Value();
+        if (hw.Has("cacheMisses")) counters.cache_misses = hw.Get("cacheMisses").As<Boolean>().Value();
+        if (hw.Has("branchInstructions")) counters.branch_instructions = hw.Get("branchInstructions").As<Boolean>().Value();
+        if (hw.Has("branchMisses")) counters.branch_misses = hw.Get("branchMisses").As<Boolean>().Value();
+        if (hw.Has("stalledCyclesFrontend")) counters.stalled_cycles_frontend = hw.Get("stalledCyclesFrontend").As<Boolean>().Value();
+        if (hw.Has("stalledCyclesBackend")) counters.stalled_cycles_backend = hw.Get("stalledCyclesBackend").As<Boolean>().Value();
+        if (hw.Has("contextSwitches")) counters.context_switches = hw.Get("contextSwitches").As<Boolean>().Value();
+        if (hw.Has("cpuMigrations")) counters.cpu_migrations = hw.Get("cpuMigrations").As<Boolean>().Value();
+        if (hw.Has("pageFaults")) counters.page_faults = hw.Get("pageFaults").As<Boolean>().Value();
+        
+        // P1: Detailed L1 Data Cache counters
+        if (hw.Has("l1DcacheLoads")) counters.l1_dcache_loads = hw.Get("l1DcacheLoads").As<Boolean>().Value();
+        if (hw.Has("l1DcacheLoadMisses")) counters.l1_dcache_load_misses = hw.Get("l1DcacheLoadMisses").As<Boolean>().Value();
+        if (hw.Has("l1DcacheStores")) counters.l1_dcache_stores = hw.Get("l1DcacheStores").As<Boolean>().Value();
+        if (hw.Has("l1DcacheStoreMisses")) counters.l1_dcache_store_misses = hw.Get("l1DcacheStoreMisses").As<Boolean>().Value();
+        
+        // P1: L1 Instruction Cache counters
+        if (hw.Has("l1IcacheLoads")) counters.l1_icache_loads = hw.Get("l1IcacheLoads").As<Boolean>().Value();
+        if (hw.Has("l1IcacheLoadMisses")) counters.l1_icache_load_misses = hw.Get("l1IcacheLoadMisses").As<Boolean>().Value();
+        
+        // P1: LLC counters
+        if (hw.Has("llcLoads")) counters.llc_loads = hw.Get("llcLoads").As<Boolean>().Value();
+        if (hw.Has("llcLoadMisses")) counters.llc_load_misses = hw.Get("llcLoadMisses").As<Boolean>().Value();
+        if (hw.Has("llcStores")) counters.llc_stores = hw.Get("llcStores").As<Boolean>().Value();
+        if (hw.Has("llcStoreMisses")) counters.llc_store_misses = hw.Get("llcStoreMisses").As<Boolean>().Value();
+        
+        // P1: Data TLB counters
+        if (hw.Has("dtlbLoads")) counters.dtlb_loads = hw.Get("dtlbLoads").As<Boolean>().Value();
+        if (hw.Has("dtlbLoadMisses")) counters.dtlb_load_misses = hw.Get("dtlbLoadMisses").As<Boolean>().Value();
+        if (hw.Has("dtlbStores")) counters.dtlb_stores = hw.Get("dtlbStores").As<Boolean>().Value();
+        if (hw.Has("dtlbStoreMisses")) counters.dtlb_store_misses = hw.Get("dtlbStoreMisses").As<Boolean>().Value();
+        
+        // P1: Instruction TLB counters
+        if (hw.Has("itlbLoads")) counters.itlb_loads = hw.Get("itlbLoads").As<Boolean>().Value();
+        if (hw.Has("itlbLoadMisses")) counters.itlb_load_misses = hw.Get("itlbLoadMisses").As<Boolean>().Value();
+        
+        // Custom counters
+        if (hw.Has("custom") && hw.Get("custom").IsArray()) {
+            Array custom = hw.Get("custom").As<Array>();
+            for (uint32_t i = 0; i < custom.Length(); ++i) {
+                if (custom.Get(i).IsString()) {
+                    counters.custom.push_back(custom.Get(i).As<String>().Utf8Value());
+                }
+            }
+        }
     }
 
 private:
@@ -145,7 +221,85 @@ private:
         obj.Set("exitCode", Number::New(env, result.exit_code));
         obj.Set("errorMessage", String::New(env, result.error_message));
         if (env.IsExceptionPending()) return env.Null().As<Object>();
+        
+        // P0: perf stat mode results
+        obj.Set("isStatMode", Boolean::New(env, result.is_stat_mode));
+        obj.Set("timeElapsedSeconds", Number::New(env, result.time_elapsed_seconds));
+        obj.Set("cpuUtilizationPercent", Number::New(env, result.cpu_utilization_percent));
+        if (env.IsExceptionPending()) return env.Null().As<Object>();
+        
+        // P0/P1: Hardware counter results
+        Array counters = Array::New(env, result.counters.size());
+        for (size_t i = 0; i < result.counters.size(); ++i) {
+            if (env.IsExceptionPending()) return env.Null().As<Object>();
+            counters[i] = CounterResultToObject(env, result.counters[i]);
+        }
+        obj.Set("counters", counters);
+        if (env.IsExceptionPending()) return env.Null().As<Object>();
+        
+        // P1b: Context switch tracing results
+        obj.Set("hasContextSwitchData", Boolean::New(env, result.has_context_switch_data));
+        if (result.has_context_switch_data) {
+            obj.Set("contextSwitchStats", ContextSwitchStatsToObject(env, result.cs_stats));
+            
+            Array switches = Array::New(env, result.context_switches.size());
+            for (size_t i = 0; i < result.context_switches.size(); ++i) {
+                if (env.IsExceptionPending()) return env.Null().As<Object>();
+                switches[i] = ContextSwitchEventToObject(env, result.context_switches[i]);
+            }
+            obj.Set("contextSwitches", switches);
+        }
+        if (env.IsExceptionPending()) return env.Null().As<Object>();
 
+        return obj;
+    }
+    
+    static Object CounterResultToObject(Napi::Env env, const CounterResult& counter) {
+        Object obj = Object::New(env);
+        obj.Set("name", String::New(env, counter.name));
+        obj.Set("value", Number::New(env, static_cast<double>(counter.value)));
+        obj.Set("unitRatio", Number::New(env, counter.unit_ratio));
+        obj.Set("unitName", String::New(env, counter.unit_name));
+        obj.Set("comment", String::New(env, counter.comment));
+        return obj;
+    }
+    
+    static Object ContextSwitchStatsToObject(Napi::Env env, const ContextSwitchStats& stats) {
+        Object obj = Object::New(env);
+        obj.Set("totalSwitches", Number::New(env, static_cast<double>(stats.total_switches)));
+        obj.Set("voluntarySwitches", Number::New(env, static_cast<double>(stats.voluntary_switches)));
+        obj.Set("involuntarySwitches", Number::New(env, static_cast<double>(stats.involuntary_switches)));
+        obj.Set("migrations", Number::New(env, static_cast<double>(stats.migrations)));
+        obj.Set("avgSwitchIntervalMs", Number::New(env, stats.avg_switch_interval_ms));
+        obj.Set("uniqueThreads", Number::New(env, stats.unique_threads));
+        obj.Set("mostActiveThread", Number::New(env, stats.most_active_thread));
+        return obj;
+    }
+    
+    static Object ContextSwitchEventToObject(Napi::Env env, const ContextSwitchEvent& evt) {
+        Object obj = Object::New(env);
+        obj.Set("timestampMs", Number::New(env, evt.timestamp_ms));
+        obj.Set("cpu", Number::New(env, evt.cpu));
+        obj.Set("prevPid", Number::New(env, evt.prev_pid));
+        obj.Set("nextPid", Number::New(env, evt.next_pid));
+        obj.Set("prevComm", String::New(env, evt.prev_comm));
+        obj.Set("nextComm", String::New(env, evt.next_comm));
+        obj.Set("isWakeup", Boolean::New(env, evt.is_wakeup));
+        
+        Array stack = Array::New(env, evt.stack.size());
+        for (size_t i = 0; i < evt.stack.size(); ++i) {
+            stack[i] = StackFrameToObject(env, evt.stack[i]);
+        }
+        obj.Set("stack", stack);
+        return obj;
+    }
+    
+    static Object StackFrameToObject(Napi::Env env, const StackFrame& frame) {
+        Object obj = Object::New(env);
+        obj.Set("symbol", String::New(env, frame.symbol));
+        obj.Set("file", String::New(env, frame.file));
+        obj.Set("address", Number::New(env, static_cast<double>(frame.address)));
+        obj.Set("line", Number::New(env, frame.line));
         return obj;
     }
 
