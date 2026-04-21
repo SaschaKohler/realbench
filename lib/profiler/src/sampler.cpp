@@ -439,7 +439,15 @@ parse_perf_script_output(const std::string &path,
         return it->second;
     }
     // Fallback: strip +0xOFFSET suffix for cleaner display
-    return strip_offset(fr.sym);
+    std::string name = strip_offset(fr.sym);
+    if (name.empty()) {
+      // Symbol was only an offset (e.g. "+0x1234") — use raw address so
+      // we still have a non-empty key and a meaningful display string.
+      char buf[32];
+      snprintf(buf, sizeof(buf), "0x%lx", fr.addr);
+      return std::string(buf);
+    }
+    return name;
   };
 
   for (const auto &stk : all_stacks) {
@@ -875,12 +883,317 @@ public:
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Build perf stat command arguments from hardware counter config
+  // ---------------------------------------------------------------------------
+  static std::vector<std::string> build_stat_events(const HardwareCounters &hw) {
+    std::vector<std::string> events;
+    if (hw.cycles) events.push_back("cycles");
+    if (hw.instructions) events.push_back("instructions");
+    if (hw.cache_references) events.push_back("cache-references");
+    if (hw.cache_misses) events.push_back("cache-misses");
+    if (hw.branch_instructions) events.push_back("branches");
+    if (hw.branch_misses) events.push_back("branch-misses");
+    if (hw.stalled_cycles_frontend) events.push_back("stalled-cycles-frontend");
+    if (hw.stalled_cycles_backend) events.push_back("stalled-cycles-backend");
+    if (hw.context_switches) events.push_back("cs");
+    if (hw.cpu_migrations) events.push_back("migrations");
+    if (hw.page_faults) {
+      events.push_back("page-faults");
+    }
+    // Add custom counters
+    for (const auto &custom : hw.custom) {
+      events.push_back(custom);
+    }
+    // Default if nothing selected
+    if (events.empty()) {
+      events = {"cycles", "instructions", "cache-references", "cache-misses"};
+    }
+    return events;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Parse perf stat -x, output (CSV format)
+  // Format: counter_value,unit,event_name,run_time,percentage,comment
+  // Example: 5491605997,,cycles,1.614165346,40.18%,3.409 GHz
+  // ---------------------------------------------------------------------------
+  static std::vector<CounterResult> parse_perf_stat_output(const std::string &output) {
+    std::vector<CounterResult> results;
+    std::istringstream iss(output);
+    std::string line;
+    
+    while (std::getline(iss, line)) {
+      if (line.empty() || line[0] == '#') continue;
+      
+      std::istringstream line_iss(line);
+      std::string value_str, unit, event_name, run_time, percentage, comment;
+      
+      if (!std::getline(line_iss, value_str, ',')) continue;
+      if (!std::getline(line_iss, unit, ',')) continue;
+      if (!std::getline(line_iss, event_name, ',')) continue;
+      
+      // Parse value (may be empty for not-supported counters)
+      CounterResult result;
+      result.name = event_name;
+      
+      // Trim whitespace
+      auto trim = [](std::string &s) {
+        size_t start = s.find_first_not_of(" \t");
+        size_t end = s.find_last_not_of(" \t");
+        if (start == std::string::npos) s = "";
+        else s = s.substr(start, end - start + 1);
+      };
+      trim(value_str);
+      trim(event_name);
+      trim(unit);
+      
+      result.name = event_name;
+      
+      if (!value_str.empty() && value_str != "<not supported>" && value_str != "<not counted>") {
+        try {
+          // Handle numbers with commas (thousands separator)
+          std::string value_clean = value_str;
+          value_clean.erase(std::remove(value_clean.begin(), value_clean.end(), ','), value_clean.end());
+          result.value = std::stoull(value_clean);
+        } catch (...) {
+          result.value = 0;
+        }
+      }
+      
+      // Read optional fields if present
+      if (std::getline(line_iss, run_time, ',')) {
+        trim(run_time);
+        // run_time contains the time in seconds as string, not needed per counter
+      }
+      if (std::getline(line_iss, percentage, ',')) {
+        trim(percentage);
+        result.comment = percentage;
+      }
+      // Remaining fields go into comment
+      std::string extra;
+      while (std::getline(line_iss, extra, ',')) {
+        trim(extra);
+        if (!extra.empty() && result.comment.empty()) {
+          result.comment = extra;
+        }
+      }
+      
+      // Calculate IPC and other ratios if we have the data
+      if (event_name == "instructions" && result.value > 0) {
+        // IPC will be calculated after all counters are parsed
+      }
+      
+      results.push_back(result);
+    }
+    
+    // Post-process: calculate IPC and other ratios
+    uint64_t cycles = 0, instructions = 0;
+    for (const auto &r : results) {
+      if (r.name == "cycles") cycles = r.value;
+      if (r.name == "instructions") instructions = r.value;
+    }
+    if (cycles > 0 && instructions > 0) {
+      for (auto &r : results) {
+        if (r.name == "instructions") {
+          r.unit_ratio = static_cast<double>(instructions) / cycles;
+          r.unit_name = "insn per cycle";
+        }
+      }
+    }
+    
+    return results;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Profile binary using perf stat (counter mode - low overhead)
+  // ---------------------------------------------------------------------------
+  ProfileResult profile_binary_stat(const std::string &binary_path,
+                                    const std::vector<std::string> &args) {
+    auto start = std::chrono::steady_clock::now();
+    
+    // Build events list
+    auto events = build_stat_events(config_.hw_counters);
+    std::string events_str;
+    for (size_t i = 0; i < events.size(); ++i) {
+      if (i > 0) events_str += ",";
+      events_str += events[i];
+    }
+    
+    fprintf(stderr, "[profiler] stat mode with events: %s\n", events_str.c_str());
+    fflush(stderr);
+    
+    // Run perf stat with CSV output
+    std::vector<std::string> cmd;
+    cmd.push_back("perf");
+    cmd.push_back("stat");
+    cmd.push_back("-x,");  // CSV separator
+    cmd.push_back("-e");
+    cmd.push_back(events_str);
+    if (config_.stat_detailed) {
+      cmd.push_back("-d");
+    }
+    cmd.push_back("-o");
+    std::string stat_output = make_tmp_path("perf_stat");
+    remove_if_exists(stat_output);
+    cmd.push_back(stat_output);
+    cmd.push_back("--");
+    cmd.push_back(binary_path);
+    for (const auto &arg : args) {
+      cmd.push_back(arg);
+    }
+    
+    int rc = run_and_wait(cmd);
+    if (rc == 127) {
+      remove_if_exists(stat_output);
+      throw ProfilerException("perf not found – please install linux-perf");
+    }
+    
+    auto end = std::chrono::steady_clock::now();
+    uint32_t duration_ms = static_cast<uint32_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
+    
+    // Read and parse output
+    std::ifstream f(stat_output);
+    std::string output((std::istreambuf_iterator<char>(f)),
+                       std::istreambuf_iterator<char>());
+    remove_if_exists(stat_output);
+    
+    auto counters = parse_perf_stat_output(output);
+    
+    // Extract time elapsed and CPU utilization from perf stat summary
+    double time_elapsed = 0.0;
+    uint32_t cpu_util = 0;
+    
+    // Parse "seconds time elapsed" line which is always printed
+    std::istringstream time_iss(output);
+    std::string line;
+    while (std::getline(time_iss, line)) {
+      // Look for line containing "seconds time elapsed"
+      auto pos = line.find("seconds time elapsed");
+      if (pos != std::string::npos) {
+        // Extract the number before it
+        std::string prefix = line.substr(0, pos);
+        // Remove commas and parse
+        prefix.erase(std::remove(prefix.begin(), prefix.end(), ','), prefix.end());
+        try {
+          time_elapsed = std::stod(prefix);
+        } catch (...) {}
+      }
+      // Look for "CPUs utilized"
+      pos = line.find("CPUs utilized");
+      if (pos != std::string::npos) {
+        std::string prefix = line.substr(0, pos);
+        try {
+          double util = std::stod(prefix);
+          cpu_util = static_cast<uint32_t>(util * 100);  // 0-999%
+        } catch (...) {}
+      }
+    }
+    
+    // Build result (no hotspots/callgraph in stat mode)
+    ProfileResult result;
+    result.target_binary = binary_path;
+    result.duration_ms = duration_ms;
+    result.total_samples = 0;  // Not applicable in stat mode
+    result.exit_code = rc;
+    result.counters = counters;
+    result.time_elapsed_seconds = time_elapsed > 0 ? time_elapsed : duration_ms / 1000.0;
+    result.cpu_utilization_percent = cpu_util;
+    result.is_stat_mode = true;
+    
+    // Generate a simple flamegraph text showing counter values
+    std::ostringstream svg;
+    svg << R"(<?xml version="1.0" standalone="no"?>)" "\n"
+        << "<svg version=\"1.1\" width=\"800\" height=\"400\""
+        << " viewBox=\"0 0 800 400\" xmlns=\"http://www.w3.org/2000/svg\">\n"
+        << "  <rect width=\"100%\" height=\"100%\" fill=\"#1a1a2e\"/>\n"
+        << "  <text x=\"400\" y=\"25\" font-family=\"'Segoe UI',Verdana,sans-serif\""
+        << " font-size=\"16\" fill=\"#e0e0e0\" text-anchor=\"middle\" font-weight=\"bold\">\n"
+        << "    Hardware Performance Counters (perf stat)\n"
+        << "  </text>\n";
+    
+    int y = 60;
+    for (const auto &c : counters) {
+      if (c.value == 0) continue;
+      
+      char value_buf[64];
+      if (c.value > 1000000000) {
+        snprintf(value_buf, sizeof(value_buf), "%.2f B", c.value / 1000000000.0);
+      } else if (c.value > 1000000) {
+        snprintf(value_buf, sizeof(value_buf), "%.2f M", c.value / 1000000.0);
+      } else if (c.value > 1000) {
+        snprintf(value_buf, sizeof(value_buf), "%.2f K", c.value / 1000.0);
+      } else {
+        snprintf(value_buf, sizeof(value_buf), "%lu", c.value);
+      }
+      
+      std::string label = c.name + ": " + value_buf;
+      if (!c.unit_name.empty()) {
+        char ratio_buf[32];
+        snprintf(ratio_buf, sizeof(ratio_buf), " (%.2f %s)", c.unit_ratio, c.unit_name.c_str());
+        label += ratio_buf;
+      }
+      
+      svg << "  <text x=\"20\" y=\"" << y << "\" font-family=\"'Segoe UI',Verdana,sans-serif\""
+          << " font-size=\"13\" fill=\"#ccc\">" << label << "</text>\n";
+      
+      if (!c.comment.empty()) {
+        svg << "  <text x=\"400\" y=\"" << y << "\" font-family=\"'Segoe UI',Verdana,sans-serif\""
+            << " font-size=\"11\" fill=\"#888\">" << c.comment << "</text>\n";
+      }
+      
+      y += 25;
+    }
+    
+    // Add time info
+    y += 15;
+    char time_buf[64];
+    snprintf(time_buf, sizeof(time_buf), "Time: %.3f s | CPU Util: %.1f%%",
+             result.time_elapsed_seconds, result.cpu_utilization_percent / 100.0);
+    svg << "  <text x=\"20\" y=\"" << y << "\" font-family=\"'Segoe UI',Verdana,sans-serif\""
+        << " font-size=\"12\" fill=\"#aaa\">" << time_buf << "</text>\n";
+    
+    svg << "</svg>\n";
+    result.flamegraph_svg = svg.str();
+    
+    // Build JSON with counters
+    std::ostringstream json;
+    json << "{\n  \"mode\": \"stat\",\n  \"counters\": [\n";
+    for (size_t i = 0; i < counters.size(); ++i) {
+      const auto &c = counters[i];
+      json << "    {\n"
+           << "      \"name\": \"" << c.name << "\",\n"
+           << "      \"value\": " << c.value << ",\n"
+           << "      \"unitRatio\": " << c.unit_ratio << ",\n"
+           << "      \"unitName\": \"" << c.unit_name << "\",\n"
+           << "      \"comment\": \"" << c.comment << "\"\n"
+           << "    }";
+      if (i + 1 < counters.size()) json << ",";
+      json << "\n";
+    }
+    json << "  ],\n  \"timeElapsed\": " << result.time_elapsed_seconds << ",\n";
+    json << "  \"cpuUtilization\": " << result.cpu_utilization_percent / 100.0 << "\n}";
+    result.flamegraph_json = json.str();
+    
+    fprintf(stderr, "[profiler] stat mode complete: %zu counters, %.3f seconds\n",
+            counters.size(), result.time_elapsed_seconds);
+    fflush(stderr);
+    
+    return result;
+  }
+
   ProfileResult profile_binary(const std::string &binary_path,
                                const std::vector<std::string> &args) {
+    // Route to appropriate profiling mode
+    if (config_.mode == ProfileMode::STAT) {
+      return profile_binary_stat(binary_path, args);
+    }
+    
+    // Default: SAMPLING mode
     auto start = std::chrono::steady_clock::now();
 
     BinaryRuntime rt = detect_binary_runtime(binary_path);
-    fprintf(stderr, "[profiler] detected runtime: %s\n",
+    fprintf(stderr, "[profiler] detected runtime: %s (sampling mode)\n",
             rt == BinaryRuntime::GO     ? "go"
             : rt == BinaryRuntime::RUST ? "rust"
                                         : "native");
