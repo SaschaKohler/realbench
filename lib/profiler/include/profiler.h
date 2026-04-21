@@ -62,6 +62,9 @@ struct ProfileConfig {
     ProfileMode mode = ProfileMode::SAMPLING;  // Profiling mode
     HardwareCounters hw_counters;               // Hardware counter selection
     bool stat_detailed = false;               // perf stat -d (detailed mode)
+    
+    // New: context switch tracing (SAMPLING mode)
+    bool trace_context_switches = false;      // Trace all context switches with stacks
 };
 
 // A directed call edge: caller invoked callee with this many IR
@@ -78,6 +81,29 @@ struct CounterResult {
     double unit_ratio = 0.0;            // Ratio (e.g., IPC = insns/cycle)
     std::string unit_name;              // Name of ratio (e.g., "insn per cycle")
     std::string comment;                // Additional info (e.g., "7.90% of all L1-dcache hits")
+};
+
+// Context switch event (for multithreading analysis)
+struct ContextSwitchEvent {
+    double timestamp_ms;                // Time relative to profile start
+    uint32_t cpu;                       // CPU where switch occurred
+    pid_t prev_pid;                     // Previous process/thread ID
+    pid_t next_pid;                     // Next process/thread ID
+    std::string prev_comm;              // Previous process name
+    std::string next_comm;              // Next process name
+    std::vector<StackFrame> stack;      // Stack trace at switch point
+    bool is_wakeup;                     // True if this is a wakeup (not a yield)
+};
+
+// Context switch summary statistics
+struct ContextSwitchStats {
+    uint64_t total_switches = 0;        // Total context switches
+    uint64_t voluntary_switches = 0;    // Thread yielded CPU
+    uint64_t involuntary_switches = 0;  // Thread was preempted
+    uint64_t migrations = 0;            // Switches to different CPU
+    double avg_switch_interval_ms = 0;  // Average time between switches
+    uint32_t unique_threads = 0;        // Number of threads seen
+    pid_t most_active_thread = 0;         // Thread with most switches
 };
 
 // Profiling result
@@ -98,6 +124,11 @@ struct ProfileResult {
     double time_elapsed_seconds = 0.0;            // Wall-clock time
     uint32_t cpu_utilization_percent = 0;         // CPU utilization (0-999%)
     bool is_stat_mode = false;                    // Result came from stat mode
+    
+    // New: context switch tracing results
+    std::vector<ContextSwitchEvent> context_switches;  // Raw switch events
+    ContextSwitchStats cs_stats;                      // Switch statistics
+    bool has_context_switch_data = false;               // True if tracing was enabled
 };
 
 // Main profiler class
