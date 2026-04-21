@@ -52,6 +52,14 @@ export default function ProjectDetail() {
   // Delete run state
   const [runToDelete, setRunToDelete] = useState<string | null>(null);
 
+  // P0/P1/P1b: Profiling options state
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  const [profilingMode, setProfilingMode] = useState<'sampling' | 'stat'>('sampling');
+  const [statDetailed, setStatDetailed] = useState(false);
+  const [traceContextSwitches, setTraceContextSwitches] = useState(false);
+  const [enableCacheCounters, setEnableCacheCounters] = useState(false);
+  const [enableTlbCounters, setEnableTlbCounters] = useState(false);
+
   const handleUpdateName = async () => {
     if (editName.trim() && id) {
       await updateProject.mutateAsync({ projectId: id, name: editName.trim() });
@@ -74,12 +82,43 @@ export default function ProjectDetail() {
   const handleUpload = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedFile || !commitSha || !id) return;
+    
+    // Build profiling options
+    const profilingOptions: import('../lib/api').ProfilingOptionsInput = {
+      mode: profilingMode,
+      statDetailed,
+      traceContextSwitches,
+    };
+    
+    // P1: Add hardware counters if enabled
+    if (profilingMode === 'stat' && (enableCacheCounters || enableTlbCounters)) {
+      profilingOptions.hwCounters = {
+        cycles: true,
+        instructions: true,
+      };
+      
+      if (enableCacheCounters) {
+        profilingOptions.hwCounters.l1DcacheLoads = true;
+        profilingOptions.hwCounters.l1DcacheLoadMisses = true;
+        profilingOptions.hwCounters.llcLoads = true;
+        profilingOptions.hwCounters.llcLoadMisses = true;
+      }
+      
+      if (enableTlbCounters) {
+        profilingOptions.hwCounters.dtlbLoads = true;
+        profilingOptions.hwCounters.dtlbLoadMisses = true;
+        profilingOptions.hwCounters.itlbLoads = true;
+        profilingOptions.hwCounters.itlbLoadMisses = true;
+      }
+    }
+    
     uploadBinary({
       projectId: id,
       commitSha,
       branch,
       buildType,
       binary: selectedFile,
+      profilingOptions,
     });
   };
 
@@ -214,6 +253,118 @@ export default function ProjectDetail() {
                 className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-blue-500 file:mr-3 file:bg-gray-600 file:border-0 file:text-white file:rounded file:px-2 file:py-1"
               />
             </div>
+            {/* Advanced Options Toggle */}
+            <div className="sm:col-span-2">
+              <button
+                type="button"
+                onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+                className="text-gray-400 hover:text-white text-sm flex items-center gap-2"
+              >
+                <svg
+                  className={`w-4 h-4 transition-transform ${showAdvancedOptions ? 'rotate-180' : ''}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+                Advanced Profiling Options
+              </button>
+            </div>
+
+            {/* Advanced Options Panel */}
+            {showAdvancedOptions && (
+              <>
+                {/* P0: Profiling Mode */}
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">Profiling Mode</label>
+                  <select
+                    value={profilingMode}
+                    onChange={(e) => setProfilingMode(e.target.value as 'sampling' | 'stat')}
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="sampling">Sampling (Flamegraph)</option>
+                    <option value="stat">Stat Mode (Hardware Counters)</option>
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {profilingMode === 'sampling' 
+                      ? 'Records call stacks for flamegraph visualization' 
+                      : 'Counts hardware events (cycles, cache misses, etc.)'}
+                  </p>
+                </div>
+
+                {/* P0: Stat Mode Options */}
+                {profilingMode === 'stat' && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="statDetailed"
+                      checked={statDetailed}
+                      onChange={(e) => setStatDetailed(e.target.checked)}
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500"
+                    />
+                    <label htmlFor="statDetailed" className="text-sm text-gray-300">
+                      Detailed output
+                    </label>
+                  </div>
+                )}
+
+                {/* P1: Hardware Counter Presets */}
+                {profilingMode === 'stat' && (
+                  <>
+                    <div className="sm:col-span-2 border-t border-gray-700 pt-4">
+                      <h4 className="text-sm font-semibold text-gray-300 mb-3">Hardware Counter Presets</h4>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id="cacheCounters"
+                            checked={enableCacheCounters}
+                            onChange={(e) => setEnableCacheCounters(e.target.checked)}
+                            className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500"
+                          />
+                          <label htmlFor="cacheCounters" className="text-sm text-gray-300">
+                            Cache Analysis (L1/LLC)
+                          </label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id="tlbCounters"
+                            checked={enableTlbCounters}
+                            onChange={(e) => setEnableTlbCounters(e.target.checked)}
+                            className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500"
+                          />
+                          <label htmlFor="tlbCounters" className="text-sm text-gray-300">
+                            TLB Analysis (DTLB/ITLB)
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* P1b: Context Switch Tracing */}
+                <div className="sm:col-span-2 border-t border-gray-700 pt-4">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="traceContextSwitches"
+                      checked={traceContextSwitches}
+                      onChange={(e) => setTraceContextSwitches(e.target.checked)}
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500"
+                    />
+                    <label htmlFor="traceContextSwitches" className="text-sm text-gray-300">
+                      Trace Context Switches (Multithreading Analysis)
+                    </label>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1 ml-6">
+                    Records thread scheduling events and CPU migrations
+                  </p>
+                </div>
+              </>
+            )}
+
             <div className="sm:col-span-2 flex items-center gap-4">
               <button
                 type="submit"

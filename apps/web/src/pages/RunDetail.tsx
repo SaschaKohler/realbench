@@ -62,6 +62,33 @@ export default function RunDetail() {
                 <dt className="text-gray-400 text-sm">Duration</dt>
                 <dd className="text-white">{run?.durationMs ? `${run.durationMs}ms` : 'N/A'}</dd>
               </div>
+              {/* P0: Profiling Mode */}
+              <div>
+                <dt className="text-gray-400 text-sm">Profiling Mode</dt>
+                <dd className="text-white">
+                  <span className={`inline-flex items-center px-2 py-1 rounded text-xs ${
+                    run?.profilingMode === 'stat' 
+                      ? 'bg-purple-900 text-purple-200' 
+                      : 'bg-blue-900 text-blue-200'
+                  }`}>
+                    {run?.profilingMode || 'sampling'}
+                  </span>
+                </dd>
+              </div>
+              {/* P0: CPU Utilization */}
+              {run?.cpuUtilizationPercent !== null && (
+                <div>
+                  <dt className="text-gray-400 text-sm">CPU Utilization</dt>
+                  <dd className="text-white">{run.cpuUtilizationPercent}%</dd>
+                </div>
+              )}
+              {/* P0: Time Elapsed */}
+              {run?.timeElapsedSeconds !== null && (
+                <div>
+                  <dt className="text-gray-400 text-sm">Time Elapsed</dt>
+                  <dd className="text-white">{run.timeElapsedSeconds}s</dd>
+                </div>
+              )}
             </dl>
           </div>
 
@@ -79,6 +106,111 @@ export default function RunDetail() {
             </div>
           )}
         </div>
+
+        {/* P0/P1: Hardware Counter Results */}
+        {run?.counters && run.counters.length > 0 && (
+          <div className="bg-gray-800 rounded-lg p-6 mb-8">
+            <h3 className="text-xl font-semibold mb-4">Hardware Performance Counters</h3>
+            <table className="min-w-full divide-y divide-gray-700">
+              <thead>
+                <tr>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">
+                    Counter
+                  </th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">
+                    Value
+                  </th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">
+                    Per Unit
+                  </th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">
+                    Unit
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-700">
+                {run.counters.map((counter: any, index: number) => (
+                  <tr key={index}>
+                    <td className="px-4 py-2 text-sm font-mono">{counter.name}</td>
+                    <td className="px-4 py-2 text-sm">{counter.value.toLocaleString()}</td>
+                    <td className="px-4 py-2 text-sm">{counter.unitRatio?.toFixed(2) || '-'}</td>
+                    <td className="px-4 py-2 text-sm text-gray-400">{counter.unitName || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {run.isStatMode && run.counters.length >= 2 && (
+              <div className="mt-4 p-4 bg-gray-700 rounded">
+                <h4 className="font-semibold mb-2">Calculated Metrics</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  {(() => {
+                    const cycles = run.counters.find((c: any) => c.name === 'cycles')?.value || 0;
+                    const instructions = run.counters.find((c: any) => c.name === 'instructions')?.value || 0;
+                    const l1Misses = run.counters.find((c: any) => c.name === 'L1-dcache-load-misses')?.value || 0;
+                    const l1Loads = run.counters.find((c: any) => c.name === 'L1-dcache-loads')?.value || 0;
+                    const llcMisses = run.counters.find((c: any) => c.name === 'LLC-load-misses')?.value || 0;
+                    const llcLoads = run.counters.find((c: any) => c.name === 'LLC-loads')?.value || 0;
+                    return (
+                      <>
+                        {instructions > 0 && (
+                          <div>
+                            <dt className="text-gray-400 text-sm">IPC (Instructions per Cycle)</dt>
+                            <dd className="text-white font-mono">{(instructions / cycles).toFixed(2)}</dd>
+                          </div>
+                        )}
+                        {l1Loads > 0 && (
+                          <div>
+                            <dt className="text-gray-400 text-sm">L1 Data Cache Miss Rate</dt>
+                            <dd className="text-white font-mono">{((l1Misses / l1Loads) * 100).toFixed(2)}%</dd>
+                          </div>
+                        )}
+                        {llcLoads > 0 && (
+                          <div>
+                            <dt className="text-gray-400 text-sm">LLC Miss Rate</dt>
+                            <dd className="text-white font-mono">{((llcMisses / llcLoads) * 100).toFixed(2)}%</dd>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* P1b: Context Switch Tracing */}
+        {run?.hasContextSwitchData && run.contextSwitchStats && (
+          <div className="bg-gray-800 rounded-lg p-6 mb-8">
+            <h3 className="text-xl font-semibold mb-4">Context Switch Analysis</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+              <div className="bg-gray-700 p-3 rounded">
+                <dt className="text-gray-400 text-sm">Total Switches</dt>
+                <dd className="text-white text-lg font-mono">{run.contextSwitchStats.totalSwitches?.toLocaleString()}</dd>
+              </div>
+              <div className="bg-gray-700 p-3 rounded">
+                <dt className="text-gray-400 text-sm">Voluntary</dt>
+                <dd className="text-white text-lg font-mono">{run.contextSwitchStats.voluntarySwitches?.toLocaleString()}</dd>
+              </div>
+              <div className="bg-gray-700 p-3 rounded">
+                <dt className="text-gray-400 text-sm">Involuntary</dt>
+                <dd className="text-white text-lg font-mono">{run.contextSwitchStats.involuntarySwitches?.toLocaleString()}</dd>
+              </div>
+              <div className="bg-gray-700 p-3 rounded">
+                <dt className="text-gray-400 text-sm">CPU Migrations</dt>
+                <dd className="text-white text-lg font-mono">{run.contextSwitchStats.migrations?.toLocaleString()}</dd>
+              </div>
+            </div>
+            {run.contextSwitchStats.uniqueThreads > 0 && (
+              <div className="mt-2 text-gray-400 text-sm">
+                Active Threads: <span className="text-white">{run.contextSwitchStats.uniqueThreads}</span>
+                {run.contextSwitchStats.avgSwitchIntervalMs > 0 && (
+                  <span> • Avg Switch Interval: <span className="text-white">{run.contextSwitchStats.avgSwitchIntervalMs.toFixed(2)}ms</span></span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {run?.suggestions && run.suggestions.length > 0 && (
           <div className="bg-gray-800 rounded-lg p-6">
