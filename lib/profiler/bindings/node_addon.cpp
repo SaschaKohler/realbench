@@ -116,72 +116,87 @@ private:
 
     static Object ResultToObject(Napi::Env env, const ProfileResult& result) {
         Object obj = Object::New(env);
-        
-        try {
-            Array hotspots = Array::New(env, result.hotspots.size());
-            for (size_t i = 0; i < result.hotspots.size(); ++i) {
-                hotspots[i] = HotspotToObject(env, result.hotspots[i]);
-            }
-            
-            obj.Set("hotspots", hotspots);
-            
-            // Handle potentially large flamegraph strings safely
-            if (result.flamegraph_svg.size() > 10 * 1024 * 1024) {
-                // Truncate very large SVGs (10MB limit)
-                obj.Set("flamegraphSvg", String::New(env, "<svg>Data too large</svg>"));
-            } else {
-                obj.Set("flamegraphSvg", String::New(env, result.flamegraph_svg));
-            }
-            
-            if (result.flamegraph_json.size() > 5 * 1024 * 1024) {
-                obj.Set("flamegraphJson", String::New(env, "{}"));
-            } else {
-                obj.Set("flamegraphJson", String::New(env, result.flamegraph_json));
-            }
-            
-            obj.Set("totalSamples", Number::New(env, static_cast<double>(result.total_samples)));
-            obj.Set("durationMs", Number::New(env, result.duration_ms));
-            obj.Set("targetBinary", String::New(env, result.target_binary));
-            obj.Set("commitSha", String::New(env, result.commit_sha));
-            obj.Set("exitCode", Number::New(env, result.exit_code));
-            obj.Set("errorMessage", String::New(env, result.error_message));
-        } catch (const std::exception& e) {
-            Error::New(env, std::string("Failed to convert result: ") + e.what()).ThrowAsJavaScriptException();
-            return env.Null().As<Object>();
+
+        Array hotspots = Array::New(env, result.hotspots.size());
+        for (size_t i = 0; i < result.hotspots.size(); ++i) {
+            if (env.IsExceptionPending()) return env.Null().As<Object>();
+            hotspots[i] = HotspotToObject(env, result.hotspots[i]);
         }
+        if (env.IsExceptionPending()) return env.Null().As<Object>();
+        obj.Set("hotspots", hotspots);
+
+        // Handle potentially large flamegraph strings safely
+        const std::string& svg = result.flamegraph_svg;
+        obj.Set("flamegraphSvg", String::New(env,
+            svg.size() > 10 * 1024 * 1024 ? "<svg>Data too large</svg>" : svg));
+        if (env.IsExceptionPending()) return env.Null().As<Object>();
+
+        const std::string& fjson = result.flamegraph_json;
+        obj.Set("flamegraphJson", String::New(env,
+            fjson.size() > 5 * 1024 * 1024 ? "{}" : fjson));
+        if (env.IsExceptionPending()) return env.Null().As<Object>();
+
+        obj.Set("totalSamples", Number::New(env, static_cast<double>(result.total_samples)));
+        obj.Set("durationMs", Number::New(env, result.duration_ms));
+        obj.Set("targetBinary", String::New(env, result.target_binary));
+        if (env.IsExceptionPending()) return env.Null().As<Object>();
+        obj.Set("commitSha", String::New(env, result.commit_sha));
+        if (env.IsExceptionPending()) return env.Null().As<Object>();
+        obj.Set("exitCode", Number::New(env, result.exit_code));
+        obj.Set("errorMessage", String::New(env, result.error_message));
+        if (env.IsExceptionPending()) return env.Null().As<Object>();
 
         return obj;
     }
 
     static Object HotspotToObject(Napi::Env env, const Hotspot& hotspot) {
+        if (env.IsExceptionPending()) return env.Null().As<Object>();
         Object obj = Object::New(env);
-        
-        try {
-            // Validate symbol string - replace invalid UTF-8 sequences
-            std::string safe_symbol = hotspot.symbol;
-            for (auto& c : safe_symbol) {
-                if (c == 0 || (unsigned char)c > 127) {
-                    // Replace non-ASCII with placeholder
-                    c = '?';
-                }
+
+        // Sanitize symbol: strip NUL bytes and ensure valid UTF-8.
+        // Drop NUL bytes only; do not replace non-ASCII bytes individually
+        // as that would corrupt multi-byte UTF-8 sequences.
+        // Replace any invalid UTF-8 byte sequences with the replacement
+        // character U+FFFD encoded as UTF-8 (0xEF 0xBF 0xBD).
+        std::string safe_symbol;
+        safe_symbol.reserve(hotspot.symbol.size());
+        const unsigned char* s =
+            reinterpret_cast<const unsigned char*>(hotspot.symbol.data());
+        size_t len = hotspot.symbol.size();
+        for (size_t i = 0; i < len; ) {
+            unsigned char c = s[i];
+            if (c == 0) { ++i; continue; } // drop embedded NUL
+            int seq = 0;
+            if      (c < 0x80)                       seq = 1;
+            else if ((c & 0xE0) == 0xC0 && c > 0xC1) seq = 2;
+            else if ((c & 0xF0) == 0xE0)              seq = 3;
+            else if ((c & 0xF8) == 0xF0 && c <= 0xF4) seq = 4;
+            bool valid = seq > 0;
+            if (valid) {
+                for (int j = 1; j < seq && valid; ++j)
+                    valid = (i + j < len) && ((s[i + j] & 0xC0) == 0x80);
             }
-            
-            obj.Set("symbol", String::New(env, safe_symbol));
-            obj.Set("selfSamples", Number::New(env, static_cast<double>(hotspot.self_samples)));
-            obj.Set("totalSamples", Number::New(env, static_cast<double>(hotspot.total_samples)));
-            obj.Set("callCount", Number::New(env, static_cast<double>(hotspot.call_count)));
-            obj.Set("selfPct", Number::New(env, hotspot.self_pct));
-            obj.Set("totalPct", Number::New(env, hotspot.total_pct));
-        } catch (const std::exception& e) {
-            // Fallback: set empty values on error
-            obj.Set("symbol", String::New(env, "<invalid>"));
-            obj.Set("selfSamples", Number::New(env, 0.0));
-            obj.Set("totalSamples", Number::New(env, 0.0));
-            obj.Set("callCount", Number::New(env, 0.0));
-            obj.Set("selfPct", Number::New(env, 0.0));
-            obj.Set("totalPct", Number::New(env, 0.0));
+            if (valid) {
+                for (int j = 0; j < seq; ++j)
+                    safe_symbol.push_back(static_cast<char>(s[i + j]));
+                i += seq;
+            } else {
+                // Replace invalid byte with U+FFFD
+                safe_symbol.append("\xEF\xBF\xBD");
+                ++i;
+            }
         }
-        
+        if (safe_symbol.empty())
+            safe_symbol = "<unknown>";
+
+        obj.Set("symbol", String::New(env, safe_symbol));
+        if (env.IsExceptionPending()) return env.Null().As<Object>();
+        obj.Set("selfSamples", Number::New(env, static_cast<double>(hotspot.self_samples)));
+        obj.Set("totalSamples", Number::New(env, static_cast<double>(hotspot.total_samples)));
+        obj.Set("callCount", Number::New(env, static_cast<double>(hotspot.call_count)));
+        obj.Set("selfPct", Number::New(env, hotspot.self_pct));
+        obj.Set("totalPct", Number::New(env, hotspot.total_pct));
+
         return obj;
     }
 
