@@ -236,3 +236,51 @@ export function useProfileBinary() {
     },
   });
 }
+
+// API Keys management
+export function useApiKeys() {
+  const { getToken } = useAuth();
+
+  return useQuery({
+    queryKey: ['api-keys'],
+    queryFn: async () => {
+      const token = await getToken();
+      return fetchWithAuth('/api/v1/api-keys', token);
+    },
+  });
+}
+
+export function useCreateApiKey() {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (data: { label?: string }) => {
+      const token = await getToken();
+      return fetchWithAuth('/api/v1/api-keys', token, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['api-keys'] });
+    },
+  });
+}
+
+export function useDeleteApiKey() {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (keyId: string) => {
+      const token = await getToken();
+      return fetchWithAuth(`/api/v1/api-keys/${keyId}`, token, {
+        method: 'DELETE',
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['api-keys'] });
+    },
+  });
+}

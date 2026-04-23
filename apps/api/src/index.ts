@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 import profileRoutes from './routes/profile.js';
 import projectsRoutes from './routes/projects.js';
 import runsRoutes from './routes/runs.js';
+import apiKeysRoutes from './routes/api-keys.js';
 
 dotenv.config();
 
@@ -41,6 +42,7 @@ app.use('/api/v1/profile', bodyLimit({ maxSize: 500 * 1024 * 1024 }));
 app.route('/api/v1/profile', profileRoutes);
 app.route('/api/v1/projects', projectsRoutes);
 app.route('/api/v1/runs', runsRoutes);
+app.route('/api/v1/api-keys', apiKeysRoutes);
 
 const port = parseInt(process.env.PORT || '3000', 10);
 

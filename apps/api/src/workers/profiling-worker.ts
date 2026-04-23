@@ -6,13 +6,18 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { profilingRuns } from '../db/schema.js';
 import { downloadBinary, uploadFlamegraph } from '../services/storage.js';
-import { analyzeProfiling } from '../services/llm.js';
+import { analyzeProfiling, analyzeStatRun } from '../services/llm.js';
 import { extractSourceSnippets } from '../services/source-extractor.js';
 import { getBoss, PROFILING_QUEUE, ProfilingJobData } from './queue.js';
 import { profileBinary } from '../services/profiler.js';
+import { buildComment, postOrUpdatePrComment, postPendingComment } from '../services/github.js';
 
 async function processProfilingJob(data: ProfilingJobData, markJobDone: () => Promise<void>) {
-  const { runId, projectId, binaryKey, commitSha, branch, buildType, profilingOptions } = data;
+  const { runId, projectId, binaryKey, commitSha, branch, buildType, profilingOptions, githubRepo, githubPrNumber, githubToken } = data;
+
+  const githubCtx = githubRepo && githubPrNumber && githubToken
+    ? { repo: githubRepo, prNumber: githubPrNumber, token: githubToken }
+    : null;
 
   // Job sofort bestätigen - Profiling läuft unabhängig
   await markJobDone();
@@ -23,6 +28,16 @@ async function processProfilingJob(data: ProfilingJobData, markJobDone: () => Pr
     .update(profilingRuns)
     .set({ status: 'processing' })
     .where(eq(profilingRuns.id, runId));
+
+  if (githubCtx) {
+    const pendingCommentId = await postPendingComment(githubCtx, commitSha);
+    if (pendingCommentId) {
+      await db
+        .update(profilingRuns)
+        .set({ githubCommentId: pendingCommentId })
+        .where(eq(profilingRuns.id, runId));
+    }
+  }
 
   try {
     const binaryBuffer = await downloadBinary(binaryKey);
@@ -59,14 +74,39 @@ async function processProfilingJob(data: ProfilingJobData, markJobDone: () => Pr
       await unlink(binaryPath).catch(() => {});
     }
 
-    const hotspots = profileResult.hotspots.map((h: any) => ({
-      symbol: h.symbol,
-      file: 'unknown',
-      line: 0,
-      selfPct: h.selfPct,
-      totalPct: h.totalPct,
-      callCount: h.callCount,
-    }));
+    const hotspots = profileResult.hotspots.map((h: any) => {
+      // Parse file:line from symbol if present (format: "function @ file:line")
+      let symbol = h.symbol;
+      let file: string | undefined = undefined;
+      let line: number | undefined = undefined;
+
+      const atIdx = symbol.indexOf(' @ ');
+      if (atIdx !== -1) {
+        const locationPart = symbol.slice(atIdx + 3);
+        symbol = symbol.slice(0, atIdx);
+
+        // Parse "file.cpp:123" or just "file.cpp"
+        const colonIdx = locationPart.lastIndexOf(':');
+        if (colonIdx !== -1) {
+          file = locationPart.slice(0, colonIdx);
+          const lineNum = parseInt(locationPart.slice(colonIdx + 1), 10);
+          if (!isNaN(lineNum)) {
+            line = lineNum;
+          }
+        } else {
+          file = locationPart;
+        }
+      }
+
+      return {
+        symbol,
+        file,
+        line,
+        selfPct: h.selfPct,
+        totalPct: h.totalPct,
+        callCount: h.callCount,
+      };
+    });
 
     const flamegraphUrl = await uploadFlamegraph(runId, profileResult.flamegraphSvg, 'svg');
 
@@ -91,37 +131,53 @@ async function processProfilingJob(data: ProfilingJobData, markJobDone: () => Pr
     );
     console.log(`Extracted ${sourceSnippets.length} source snippets`);
 
-    const analysis = await analyzeProfiling(
-      {
-        id: runId,
-        projectId,
-        commitSha,
-        branch,
-        buildType,
-        status: 'processing',
-        hotspots,
-        suggestions: null,
-        flamegraphUrl: null,
-        regressionDetected: null,
-        durationMs: null,
-        error: null,
-        createdAt: new Date(),
-        projectName: projectResult.name,
-        language: projectResult.language,
-        // P0/P1/P1b: New fields (null during analysis)
-        profilingMode: profilingOptions?.mode || 'sampling',
-        isStatMode: profilingOptions?.mode === 'stat',
-        timeElapsedSeconds: null,
-        cpuUtilizationPercent: null,
-        counters: null,
-        hasContextSwitchData: profilingOptions?.traceContextSwitches || false,
-        contextSwitchStats: null,
-        contextSwitches: null,
-      },
-      undefined,
-      undefined,
-      sourceSnippets
-    );
+    const isStatMode = profileResult.isStatMode || profilingOptions?.mode === 'stat';
+
+    const analysis = isStatMode
+      ? await analyzeStatRun({
+          projectName: projectResult.name,
+          language: projectResult.language,
+          commitSha,
+          branch,
+          buildType,
+          timeElapsedSeconds: profileResult.timeElapsedSeconds ?? null,
+          cpuUtilizationPercent: profileResult.cpuUtilizationPercent ?? null,
+          counters: profileResult.counters ?? null,
+          contextSwitchStats: profileResult.contextSwitchStats ?? null,
+        })
+      : await analyzeProfiling(
+          {
+            id: runId,
+            projectId,
+            commitSha,
+            branch,
+            buildType,
+            status: 'processing',
+            hotspots,
+            suggestions: null,
+            flamegraphUrl: null,
+            regressionDetected: null,
+            durationMs: null,
+            error: null,
+            createdAt: new Date(),
+            projectName: projectResult.name,
+            language: projectResult.language,
+            profilingMode: profilingOptions?.mode || 'sampling',
+            isStatMode: false,
+            timeElapsedSeconds: null,
+            cpuUtilizationPercent: null,
+            counters: null,
+            hasContextSwitchData: profilingOptions?.traceContextSwitches || false,
+            contextSwitchStats: null,
+            contextSwitches: null,
+            githubRepo: githubRepo ?? null,
+            githubPrNumber: githubPrNumber ?? null,
+            githubCommentId: null,
+          },
+          undefined,
+          undefined,
+          sourceSnippets
+        );
 
     // Prepare counter data - truncate if too large
     const counters = profileResult.counters || [];
@@ -155,6 +211,22 @@ async function processProfilingJob(data: ProfilingJobData, markJobDone: () => Pr
         contextSwitches: truncatedSwitches.length > 0 ? truncatedSwitches : null,
       })
       .where(eq(profilingRuns.id, runId));
+
+    if (githubCtx) {
+      const dashboardUrl = `${process.env.DASHBOARD_URL ?? 'https://app.realbench.dev'}/runs/${runId}`;
+      const commentBody = buildComment({
+        runId,
+        commitSha,
+        branch,
+        buildType,
+        dashboardUrl,
+        hotspots,
+        analysis,
+        durationMs: profileResult.durationMs ?? null,
+        flamegraphUrl: flamegraphUrl ?? null,
+      });
+      await postOrUpdatePrComment(githubCtx, commentBody);
+    }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('Profiling job failed:', errorMessage);

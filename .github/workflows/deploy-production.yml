@@ -1,0 +1,76 @@
+name: Deploy Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-api:
+    name: Deploy API
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Fly CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy API
+        run: fly deploy -c fly.api.toml --app realbench-api
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-web:
+    name: Deploy Web Frontend
+    runs-on: ubuntu-latest
+    environment: production
+    needs: deploy-api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Fly CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy Web (with Clerk Key from GitHub Secret)
+        run: |
+          fly deploy -c fly.web.toml \
+            --build-arg VITE_CLERK_PUBLISHABLE_KEY="${{ secrets.CLERK_PUBLISHABLE_KEY }}" \
+            --build-arg VITE_API_URL="${{ vars.VITE_API_URL || 'https://realbench-api.fly.dev' }}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-worker:
+    name: Deploy Worker
+    runs-on: ubuntu-latest
+    environment: production
+    needs: deploy-api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Fly CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy Worker
+        run: fly deploy -c fly.worker.toml --app realbench-worker
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  verify-deployment:
+    name: Verify Deployment
+    runs-on: ubuntu-latest
+    needs: [deploy-api, deploy-web, deploy-worker]
+    steps:
+      - name: Health Check API
+        run: |
+          curl -sf https://realbench-api.fly.dev/health || exit 1
+        timeout-minutes: 5
+
+      - name: Health Check Web
+        run: |
+          curl -sf https://realbench-web.fly.dev/ || exit 1
+        timeout-minutes: 5

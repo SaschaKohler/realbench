@@ -13,6 +13,11 @@ if (!connectionString) {
 
 console.log('🔌 Connecting to database:', connectionString.replace(/:[^:@]+@/, ':****@'));
 
-const client = postgres(connectionString);
+const client = postgres(connectionString, {
+  connect_timeout: 30,
+  idle_timeout: 20,
+  max_lifetime: 60 * 10,
+  max: 10,
+});
 
 export const db = drizzle(client, { schema });

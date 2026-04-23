@@ -9,12 +9,50 @@
 
 namespace realbench {
 
+// Profiling mode
+enum class ProfileMode {
+    SAMPLING,   // Standard sampling mode with flamegraphs
+    STAT        // perf stat mode with hardware counters
+};
+
+// Counter result from perf stat
+struct CounterResult {
+    std::string name;
+    uint64_t value;
+    double unit_ratio;
+    std::string unit_name;
+    std::string comment;
+};
+
+// Context switch statistics
+struct ContextSwitchStats {
+    uint64_t total_switches = 0;
+    uint64_t voluntary_switches = 0;
+    uint64_t involuntary_switches = 0;
+    uint64_t migrations = 0;
+    double avg_switch_interval_ms = 0.0;
+    uint32_t unique_threads = 0;
+    uint32_t most_active_thread = 0;
+};
+
 // Stack frame information
 struct StackFrame {
     std::string symbol;
     std::string file;
     uint64_t address;
     int line;
+};
+
+// Individual context switch event
+struct ContextSwitchEvent {
+    double timestamp_ms = 0.0;
+    int cpu = 0;
+    uint32_t prev_pid = 0;
+    uint32_t next_pid = 0;
+    std::string prev_comm;
+    std::string next_comm;
+    bool is_wakeup = false;
+    std::vector<StackFrame> stack;
 };
 
 // Performance hotspot
@@ -25,16 +63,6 @@ struct Hotspot {
     uint64_t call_count;
     double self_pct;
     double total_pct;
-};
-
-// Profiling configuration
-struct ProfileConfig {
-    uint32_t frequency_hz = 99;         // Sampling frequency
-    uint32_t duration_seconds = 30;     // Profiling duration
-    bool include_kernel = false;        // Include kernel stacks
-    bool capture_cpu = true;            // CPU profiling
-    bool capture_memory = false;        // Memory profiling
-    std::string output_format = "svg";  // svg, json, or both
 };
 
 // A directed call edge: caller invoked callee with this many IR
@@ -88,6 +116,26 @@ struct HardwareCounters {
     std::vector<std::string> custom;    // Custom counter names
 };
 
+// Profiling configuration
+struct ProfileConfig {
+    uint32_t frequency_hz = 99;         // Sampling frequency
+    uint32_t duration_seconds = 30;     // Profiling duration
+    bool include_kernel = false;        // Include kernel stacks
+    bool capture_cpu = true;            // CPU profiling
+    bool capture_memory = false;        // Memory profiling
+    std::string output_format = "svg";  // svg, json, or both
+    
+    // P0: perf stat mode
+    ProfileMode mode = ProfileMode::SAMPLING;
+    bool stat_detailed = false;
+    
+    // P0/P1: Hardware counters
+    HardwareCounters hw_counters;
+    
+    // P1b: Context switch tracing
+    bool trace_context_switches = false;
+};
+
 // Profiling result
 struct ProfileResult {
     std::vector<Hotspot> hotspots;
@@ -100,6 +148,19 @@ struct ProfileResult {
     std::string commit_sha;
     int exit_code = 0;                  // Binary execution exit code (0 = success)
     std::string error_message;          // Error message if profiling failed
+    
+    // P0: perf stat mode results
+    bool is_stat_mode = false;
+    double time_elapsed_seconds = 0.0;
+    double cpu_utilization_percent = 0.0;
+    
+    // P0/P1: Hardware counter results
+    std::vector<CounterResult> counters;
+    
+    // P1b: Context switch tracing results
+    bool has_context_switch_data = false;
+    ContextSwitchStats cs_stats;
+    std::vector<ContextSwitchEvent> context_switches;
 };
 
 // Main profiler class

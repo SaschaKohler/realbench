@@ -28,9 +28,12 @@ RUN pnpm --filter @realbench/shared build
 
 # Build web app (VITE_* vars get embedded at build time)
 ARG VITE_API_URL=https://realbench-api.fly.dev
-ENV VITE_API_URL=$VITE_API_URL
 ARG VITE_CLERK_PUBLISHABLE_KEY
-ENV VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY
+
+# Generate .env file from build args (Fly Secret passed as build-arg)
+RUN echo "VITE_API_URL=$VITE_API_URL" > ./apps/web/.env && \
+    echo "VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY" >> ./apps/web/.env
+
 RUN pnpm --filter @realbench/web build
 
 # Production stage

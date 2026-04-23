@@ -3,6 +3,7 @@ import { SignedIn, SignedOut, RedirectToSignIn } from '@clerk/clerk-react';
 import Dashboard from './pages/Dashboard';
 import ProjectDetail from './pages/ProjectDetail';
 import RunDetail from './pages/RunDetail';
+import Settings from './pages/Settings';
 
 function App() {
   return (
@@ -12,6 +13,7 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/projects/:id" element={<ProjectDetail />} />
           <Route path="/runs/:id" element={<RunDetail />} />
+          <Route path="/settings" element={<Settings />} />
         </Routes>
       </SignedIn>
       <SignedOut>

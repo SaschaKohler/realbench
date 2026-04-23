@@ -80,4 +80,8 @@ export interface ProfilingJobData {
   buildType: string;
   // P0/P1/P1b: Profiling configuration
   profilingOptions?: ProfilingOptions;
+  // GitHub Actions integration
+  githubRepo?: string;
+  githubPrNumber?: number;
+  githubToken?: string;
 }

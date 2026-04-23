@@ -29,3 +29,4 @@ cmake-build-*/
 
 # Kubernetes configuration
 k8s/
+test-cpp-project/

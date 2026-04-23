@@ -15,6 +15,34 @@
       "when": 1776601194817,
       "tag": "0001_add_error_field",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1745301600000,
+      "tag": "0002_add_profiling_mode_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1776875972474,
+      "tag": "0003_tricky_wither",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1776934928165,
+      "tag": "0004_fat_diamondback",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1776936042940,
+      "tag": "0005_elite_daredevil",
+      "breakpoints": true
     }
   ]
 }

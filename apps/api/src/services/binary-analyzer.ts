@@ -9,7 +9,7 @@ const execFileAsync = promisify(execFile);
 export interface BinaryAnalysis {
   hasDebugSymbols: boolean;
   hasLineInfo: boolean;
-  buildType: 'debug' | 'release' | 'unknown';
+  buildType: 'debug' | 'release' | 'relwithdebinfo' | 'unknown';
   compiler: string | null;
   optimizationLevel: string | null;
   symbolCount: number;
@@ -76,18 +76,7 @@ async function analyzeBinaryAtPath(binaryPath: string, _filename: string): Promi
       analysis.warnings.push('Binary has limited symbols. File/line info may not be available.');
     }
 
-    // Detect build type from symbols and sections
-    if (sectionInfo.includes('.debug_info') || sectionInfo.includes('.zdebug_info')) {
-      if (sectionInfo.includes('O0') || symInfo.includes('__ubsan') || symInfo.includes('__asan')) {
-        analysis.buildType = 'debug';
-      } else if (symInfo.includes('inline') && !sectionInfo.includes('.debug_info')) {
-        analysis.buildType = 'release';
-      } else {
-        analysis.buildType = 'debug'; // Default if debug symbols present
-      }
-    } else if (analysis.symbolCount > 0) {
-      analysis.buildType = 'release';
-    }
+    // Detect build type from symbols and sections — resolved later after strings scan
 
     // Try to detect compiler
     const { stdout: noteInfo } = await execFileAsync('readelf', ['-n', binaryPath], { timeout: 10000 })
@@ -107,14 +96,28 @@ async function analyzeBinaryAtPath(binaryPath: string, _filename: string): Promi
 
     if (stringInfo.includes('-O0')) {
       analysis.optimizationLevel = '-O0';
-    } else if (stringInfo.includes('-O1')) {
-      analysis.optimizationLevel = '-O1';
-      analysis.buildType = 'release';
-    } else if (stringInfo.includes('-O2')) {
-      analysis.optimizationLevel = '-O2';
-      analysis.buildType = 'release';
     } else if (stringInfo.includes('-O3')) {
       analysis.optimizationLevel = '-O3';
+    } else if (stringInfo.includes('-O2')) {
+      analysis.optimizationLevel = '-O2';
+    } else if (stringInfo.includes('-O1')) {
+      analysis.optimizationLevel = '-O1';
+    }
+
+    // Resolve build type: combine debug-section presence with optimization level
+    const hasDebugSections = sectionInfo.includes('.debug_info') || sectionInfo.includes('.zdebug_info');
+    const isOptimized = analysis.optimizationLevel !== null && analysis.optimizationLevel !== '-O0';
+    const isSanitized = symInfo.includes('__ubsan') || symInfo.includes('__asan');
+
+    if (hasDebugSections) {
+      if (isSanitized || analysis.optimizationLevel === '-O0') {
+        analysis.buildType = 'debug';
+      } else if (isOptimized) {
+        analysis.buildType = 'relwithdebinfo';
+      } else {
+        analysis.buildType = 'debug';
+      }
+    } else if (analysis.symbolCount > 0) {
       analysis.buildType = 'release';
     }
 
@@ -133,7 +136,7 @@ async function analyzeBinaryAtPath(binaryPath: string, _filename: string): Promi
     );
   }
 
-  if (analysis.buildType === 'release' && !analysis.hasDebugSymbols) {
+  if ((analysis.buildType === 'release' || analysis.buildType === 'unknown') && !analysis.hasDebugSymbols) {
     analysis.warnings.push(
       'Release build without debug symbols. You will see function names but not source locations. ' +
       'For development profiling, consider: `cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo` or ' +

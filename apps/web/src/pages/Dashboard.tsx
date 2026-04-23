@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { UserButton } from '@clerk/clerk-react';
 import { useProjects, useCreateProject, useDeleteProject } from '../lib/api';
+import Navigation from '../components/layout/Navigation';
 
 export default function Dashboard() {
   const { data, isLoading } = useProjects();
@@ -30,16 +30,7 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <nav className="border-b border-gray-800 bg-gray-950">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16 items-center">
-            <div className="flex items-center gap-4">
-              <h1 className="text-2xl font-bold text-white">RealBench</h1>
-            </div>
-            <UserButton afterSignOutUrl="/" />
-          </div>
-        </div>
-      </nav>
+      <Navigation />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex justify-between items-center mb-8">
@@ -135,9 +126,27 @@ export default function Dashboard() {
               >
                 <Link to={`/projects/${project.id}`} className="block">
                   <h3 className="text-xl font-semibold mb-2 pr-8">{project.name}</h3>
-                  <span className="inline-block px-3 py-1 bg-gray-700 text-sm rounded-full">
-                    {project.language.toUpperCase()}
-                  </span>
+                  <div className="space-y-2">
+                    <span className="inline-block px-3 py-1 bg-gray-700 text-sm rounded-full">
+                      {project.language.toUpperCase()}
+                    </span>
+                    <div className="text-xs text-gray-400">
+                      <div className="flex items-center gap-2">
+                        <span>Project ID:</span>
+                        <code 
+                          className="bg-gray-700 px-2 py-0.5 rounded font-mono cursor-pointer hover:bg-gray-600"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            navigator.clipboard.writeText(project.id);
+                          }}
+                          title="Click to copy"
+                        >
+                          {project.id}
+                        </code>
+                      </div>
+                    </div>
+                  </div>
                 </Link>
                 <button
                   onClick={(e) => {

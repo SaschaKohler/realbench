@@ -32,6 +32,7 @@ app.post('/', authMiddleware, async (c) => {
     }
   }
 
+  const prNumberRaw = formData.get('githubPrNumber');
   const parsed = ProfileRequestSchema.safeParse({
     projectId: formData.get('projectId'),
     commitSha: formData.get('commitSha'),
@@ -39,6 +40,9 @@ app.post('/', authMiddleware, async (c) => {
     buildType: formData.get('buildType'),
     binaryName: formData.get('binaryName') || binaryFile.name,
     profilingOptions,
+    githubRepo: formData.get('githubRepo') || undefined,
+    githubPrNumber: prNumberRaw ? parseInt(prNumberRaw as string, 10) : undefined,
+    githubToken: formData.get('githubToken') || undefined,
   });
 
   if (!parsed.success) {
@@ -72,8 +76,12 @@ app.post('/', authMiddleware, async (c) => {
       projectId: data.projectId,
       commitSha: data.commitSha,
       branch: data.branch,
-      buildType: analysis.buildType !== 'unknown' ? analysis.buildType : data.buildType,
+      buildType: analysis.buildType !== 'unknown'
+        ? analysis.buildType
+        : data.buildType === 'auto' ? 'release' : data.buildType,
       status: 'pending',
+      githubRepo: data.githubRepo ?? null,
+      githubPrNumber: data.githubPrNumber ?? null,
     })
     .returning();
 
@@ -83,9 +91,13 @@ app.post('/', authMiddleware, async (c) => {
     binaryKey,
     commitSha: data.commitSha,
     branch: data.branch,
-    buildType: data.buildType,
+    buildType: run.buildType,
     // P0/P1/P1b: Pass profiling options
     profilingOptions: data.profilingOptions,
+    // GitHub Actions integration
+    githubRepo: data.githubRepo,
+    githubPrNumber: data.githubPrNumber,
+    githubToken: data.githubToken,
   });
 
   const response: Record<string, unknown> = {

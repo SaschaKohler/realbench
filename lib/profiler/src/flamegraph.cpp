@@ -16,7 +16,7 @@ namespace realbench {
 // ---------------------------------------------------------------------------
 struct FlameNode {
     std::string name;
-    uint64_t self_ir   = 0;   // instruction refs spent in this function itself
+    uint64_t self_ir   = 0;   // samples spent in this function itself
     uint64_t total_ir  = 0;   // self + all children (set during tree build)
     std::vector<std::unique_ptr<FlameNode>> children;
 };
@@ -53,8 +53,8 @@ std::string escape_json(const std::string& str) {
 bool is_noise_symbol(const std::string& s) {
     static const char* prefixes[] = {
         "(below ", "(anonymous", "__libc", "__GI_", "_dl_",
-        "_start", "__cxa_", "_ZN9__gnu_cxx", "gsignal", "abort",
-        "__lll_", "pthread_", "clone", nullptr
+        "_start", "gsignal", "abort",
+        "__lll_", "pthread_create", "clone", nullptr
     };
     for (int i = 0; prefixes[i]; ++i)
         if (s.rfind(prefixes[i], 0) == 0) return true;
@@ -112,7 +112,7 @@ void render_node(std::ostringstream& svg, const FlameNode& node,
     svg << "  <g class=\"frame\"\n"
         << "     onclick=\"zoom(evt)\">\n"
         << "    <title>" << escape_xml(node.name)
-        << " — " << node.total_ir << " IR (" << pct_buf << ")</title>\n"
+        << " — " << node.total_ir << " samples (" << pct_buf << ")</title>\n"
         << "    <rect x=\"" << std::fixed << std::setprecision(1) << x
         << "\" y=\"" << y_top
         << "\" width=\"" << (w - 0.5)
@@ -272,7 +272,8 @@ std::string generate_flamegraph_svg(const ProfileResult& result) {
         << "<svg version=\"1.1\""
         << " width=\"" << svg_width << "\" height=\"" << svg_height << "\""
         << " viewBox=\"0 0 " << svg_width << " " << svg_height << "\""
-        << " xmlns=\"http://www.w3.org/2000/svg\">\n"
+        << " xmlns=\"http://www.w3.org/2000/svg\""
+        << " id=\"rbfg\">\n"
         // Dark background
         << "  <rect width=\"100%\" height=\"100%\" fill=\"#1a1a2e\"/>\n"
         // Title
@@ -282,7 +283,14 @@ std::string generate_flamegraph_svg(const ProfileResult& result) {
         << "  <text x=\"" << svg_width/2 << "\" y=\"40\""
         << " font-family=\"'Segoe UI',Verdana,sans-serif\" font-size=\"11\""
         << " fill=\"#888\" text-anchor=\"middle\">"
-        << result.total_samples << " instruction refs · hover for details</text>\n"
+        << result.total_samples << " samples · click to zoom · double-click to reset</text>\n"
+        // Search box (foreign object for HTML input)
+        << "  <foreignObject x=\"" << (svg_width - 220) << "\" y=\"4\" width=\"215\" height=\"24\">\n"
+        << "    <input xmlns=\"http://www.w3.org/1999/xhtml\" id=\"rbsearch\""
+        << " placeholder=\"Search…\" oninput=\"rbSearch(this.value)\""
+        << " style=\"width:100%;padding:2px 6px;font-size:11px;border-radius:4px;"
+        << "border:1px solid #555;background:#2a2a42;color:#ddd;outline:none\"/>\n"
+        << "  </foreignObject>\n"
         // Clip paths per depth level to prevent text overflow
         << "  <defs>\n";
     for (int i = 0; i <= depth; ++i) {
@@ -295,7 +303,7 @@ std::string generate_flamegraph_svg(const ProfileResult& result) {
     // "all" root bar at the top (below title), children grow downward
     double root_y_top = static_cast<double>(top_pad);
     svg << "  <g>\n"
-        << "    <title>all (" << root.total_ir << " IR)</title>\n"
+        << "    <title>all (" << root.total_ir << " samples)</title>\n"
         << "    <rect x=\"1\" y=\"" << std::fixed << std::setprecision(1) << root_y_top
         << "\" width=\"" << (svg_width - 2)
         << "\" height=\"" << (fh - 1)
@@ -321,9 +329,58 @@ std::string generate_flamegraph_svg(const ProfileResult& result) {
     // Bottom legend
     svg << "  <text x=\"4\" y=\"" << (svg_height - 8)
         << "\" font-family=\"'Segoe UI',Verdana,sans-serif\" font-size=\"10\""
-        << " fill=\"#555\">x-axis: cumulative instruction refs · y-axis: call depth</text>\n";
+        << " fill=\"#555\">x-axis: cumulative samples · y-axis: call depth · click frame to zoom · double-click to reset</text>\n";
 
-    svg << "</svg>\n";
+    // Interactive JavaScript: zoom, reset, search/highlight
+    svg << R"(  <script type="text/ecmascript"><![CDATA[
+(function() {
+  var svg = document.getElementById('rbfg');
+  var origVB = svg ? svg.getAttribute('viewBox') : null;
+
+  // zoom: scale viewBox to the clicked frame's x/width
+  window.zoom = function(evt) {
+    var g = evt.currentTarget;
+    var rect = g.querySelector('rect');
+    if (!rect || !origVB) return;
+    var vbParts = origVB.split(' ').map(Number);
+    var svgW = vbParts[2], svgH = vbParts[3];
+    var rx = parseFloat(rect.getAttribute('x'));
+    var rw = parseFloat(rect.getAttribute('width'));
+    if (rw < 1) return;
+    // keep full height, zoom x range to [rx, rx+rw]
+    svg.setAttribute('viewBox', rx + ' 0 ' + rw + ' ' + svgH);
+    evt.stopPropagation();
+  };
+
+  // double-click on SVG background resets zoom
+  if (svg) {
+    svg.addEventListener('dblclick', function(evt) {
+      if (evt.target === svg || evt.target.tagName === 'rect' && evt.target.getAttribute('fill') === '#1a1a2e') {
+        svg.setAttribute('viewBox', origVB);
+      }
+    });
+  }
+
+  // search: highlight frames whose title contains the query
+  window.rbSearch = function(query) {
+    var frames = document.querySelectorAll('.frame');
+    var q = query.trim().toLowerCase();
+    frames.forEach(function(g) {
+      var title = g.querySelector('title');
+      var rect  = g.querySelector('rect');
+      if (!title || !rect) return;
+      if (q === '') {
+        rect.style.opacity = '';
+      } else {
+        var hit = title.textContent.toLowerCase().indexOf(q) !== -1;
+        rect.style.opacity = hit ? '1' : '0.2';
+      }
+    });
+  };
+})();
+  ]]></script>
+</svg>
+)";
     return svg.str();
 }
 

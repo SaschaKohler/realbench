@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const LanguageSchema = z.enum(['cpp', 'rust', 'go']);
 export type Language = z.infer<typeof LanguageSchema>;
 
-export const BuildTypeSchema = z.enum(['release', 'debug']);
+export const BuildTypeSchema = z.enum(['release', 'debug', 'relwithdebinfo', 'auto']);
 export type BuildType = z.infer<typeof BuildTypeSchema>;
 
 export const RunStatusSchema = z.enum(['pending', 'processing', 'done', 'failed']);
@@ -37,7 +37,7 @@ export type SuggestionImpact = z.infer<typeof SuggestionImpactSchema>;
 export const SuggestionSchema = z.object({
   rank: z.number(),
   impact: SuggestionImpactSchema,
-  symbol: z.string(),
+  symbol: z.string().nullable(),
   file: z.string().nullable(),
   line: z.number().nullable(),
   problem: z.string(),
@@ -106,6 +106,10 @@ export const ProfileRequestSchema = z.object({
   binaryName: z.string().min(1),
   // P0/P1/P1b: Profiling configuration options
   profilingOptions: ProfilingOptionsSchema.optional(),
+  // GitHub Actions integration
+  githubRepo: z.string().optional(), // "owner/repo"
+  githubPrNumber: z.number().int().positive().optional(),
+  githubToken: z.string().optional(), // GITHUB_TOKEN for posting comments
 });
 export type ProfileRequest = z.infer<typeof ProfileRequestSchema>;
 

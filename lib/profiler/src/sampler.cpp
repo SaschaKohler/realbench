@@ -378,11 +378,11 @@ parse_perf_script_output(const std::string &path,
     if (!in_sample)
       continue;
     // Frame line: "\t<addr> <symbol> (<dso>)"
+    // Note: <symbol> may contain spaces (C++ templates like "std::vector<int, std::allocator<int>>")
+    // Strategy: find address first, find DSO (in parentheses) last, everything between is symbol
     std::istringstream iss(line);
-    std::string addr_str, sym;
-    if (!(iss >> addr_str >> sym))
-      continue;
-    if (sym == "[unknown]" || sym.empty())
+    std::string addr_str;
+    if (!(iss >> addr_str))
       continue;
 
     // Parse hex address
@@ -390,17 +390,41 @@ parse_perf_script_output(const std::string &path,
     try {
       addr = std::stoull(addr_str, nullptr, 16);
     } catch (...) {
+      continue;
     }
 
-    // DSO: remaining token in parentheses, e.g. "(/path/to/binary)"
-    std::string dso_token;
-    iss >> dso_token;
+    // Find DSO: look for '(' and ')' at the end of the line
+    size_t paren_open = line.find('(', addr_str.length());
+    size_t paren_close = line.rfind(')');
+
+    std::string sym;
     std::string dso;
-    if (!dso_token.empty() && dso_token.front() == '(') {
-      dso = dso_token.substr(1);
-      if (!dso.empty() && dso.back() == ')')
-        dso.pop_back();
+
+    if (paren_open != std::string::npos && paren_close != std::string::npos && paren_close > paren_open) {
+      // Extract DSO (inside parentheses)
+      dso = line.substr(paren_open + 1, paren_close - paren_open - 1);
+      // Extract symbol: everything between address and opening parenthesis, trimmed
+      size_t sym_start = addr_str.length();
+      while (sym_start < paren_open && std::isspace(line[sym_start]))
+        ++sym_start;
+      size_t sym_end = paren_open;
+      while (sym_end > sym_start && std::isspace(line[sym_end - 1]))
+        --sym_end;
+      sym = line.substr(sym_start, sym_end - sym_start);
+    } else {
+      // Fallback: use old parsing if parentheses not found
+      std::string rest;
+      if (iss >> sym >> rest) {
+        if (!rest.empty() && rest.front() == '(') {
+          dso = rest.substr(1);
+          if (!dso.empty() && dso.back() == ')')
+            dso.pop_back();
+        }
+      }
     }
+
+    if (sym == "[unknown]" || sym.empty())
+      continue;
     // Prefer the profiled binary itself for resolution
     if (dso.empty() || dso == "[unknown]")
       dso = binary_path;
@@ -599,21 +623,10 @@ static std::vector<FnCost> parse_callgrind_output(const std::string &path) {
   return result;
 }
 
-// Forward declaration
-static int run_and_wait_capture(const std::vector<std::string> &argv,
-                                std::string &out_output);
-
 // ---------------------------------------------------------------------------
-// Run a command, capture its combined stdout+stderr, wait for it.
-// Prints command, output, and exit code to our stderr for diagnostics.
-// ---------------------------------------------------------------------------
-static int run_and_wait(const std::vector<std::string> &argv) {
-  std::string dummy;
-  return run_and_wait_capture(argv, dummy);
-}
-
 // Run a command, capture its combined stdout+stderr to out_output, wait for it.
 // Prints command, output, and exit code to our stderr for diagnostics.
+// ---------------------------------------------------------------------------
 static int run_and_wait_capture(const std::vector<std::string> &argv,
                                 std::string &out_output) {
   std::vector<char *> c_argv;
@@ -673,6 +686,58 @@ static int run_and_wait_capture(const std::vector<std::string> &argv,
   fprintf(stderr, "[profiler] exit code: %d\n", rc);
   fflush(stderr);
   return rc;
+}
+
+static int run_and_wait(const std::vector<std::string> &argv) {
+  std::string dummy;
+  return run_and_wait_capture(argv, dummy);
+}
+
+// ---------------------------------------------------------------------------
+// Fork a child, run argv[0] with argv, pipe its stdout to out_path.
+// ---------------------------------------------------------------------------
+static void run_and_pipe_to_file(const std::vector<std::string> &argv,
+                                 const std::string &out_path) {
+  std::vector<char *> c_argv;
+  for (const auto &s : argv)
+    c_argv.push_back(const_cast<char *>(s.c_str()));
+  c_argv.push_back(nullptr);
+
+  int pipefd[2];
+  if (pipe(pipefd) == -1)
+    throw ProfilerException(std::string("pipe: ") + strerror(errno));
+  pid_t child = fork();
+  if (child == -1) {
+    close(pipefd[0]);
+    close(pipefd[1]);
+    throw ProfilerException(std::string("fork: ") + strerror(errno));
+  }
+  if (child == 0) {
+    close(pipefd[0]);
+    dup2(pipefd[1], STDOUT_FILENO);
+    close(pipefd[1]);
+    execvp(c_argv[0], c_argv.data());
+    _exit(127);
+  }
+  close(pipefd[1]);
+
+  FILE *out = fopen(out_path.c_str(), "w");
+  if (!out) {
+    close(pipefd[0]);
+    throw ProfilerException("fopen: " + out_path);
+  }
+  std::array<char, 4096> buf;
+  ssize_t n;
+  while ((n = read(pipefd[0], buf.data(), buf.size())) > 0)
+    fwrite(buf.data(), 1, n, out);
+  fclose(out);
+  close(pipefd[0]);
+
+  int status = 0;
+  waitpid(child, &status, 0);
+  int rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  fprintf(stderr, "[perf] script exit code: %d\n", rc);
+  fflush(stderr);
 }
 
 // ---------------------------------------------------------------------------
@@ -798,89 +863,48 @@ public:
                            const std::vector<std::string> &args,
                            const std::string &perf_data,
                            const std::string &script_out) {
-    // Detect binary runtime to choose appropriate call-graph strategy
+    // Detect binary runtime to choose appropriate call-graph strategy (SPEC §12)
     BinaryRuntime rt = detect_binary_runtime(binary_path);
-    
+
     // perf record
     {
-      std::vector<std::string> cmd;
-      cmd.push_back("perf");
-      cmd.push_back("record");
-      cmd.push_back("-F");
-      cmd.push_back(std::to_string(config_.frequency_hz));
-      cmd.push_back("-g");
-      cmd.push_back("--call-graph");
-      // Runtime-dependent call-graph strategy (SPEC §12)
-      if (rt == BinaryRuntime::GO) {
-        cmd.push_back("fp");          // Frame-Pointer für Go
-      } else {
-        cmd.push_back("dwarf,65528"); // DWARF für C++/Rust
-      }
-      cmd.push_back("-m");
-      cmd.push_back("16M");             // Mmap-Ringpuffer für alle Runtimes
-      if (!config_.include_kernel)
-        cmd.push_back("--user-callchains");
-      cmd.push_back("-o");
-      cmd.push_back(perf_data);
+      auto cmd = build_perf_record_cmd(perf_data);
+      // Override call-graph for Go (frame-pointer instead of DWARF)
+      auto it = std::find(cmd.begin(), cmd.end(), "dwarf,65528");
+      if (it != cmd.end() && rt == BinaryRuntime::GO)
+        *it = "fp";
       cmd.push_back("--");
       cmd.push_back(binary_path);
       for (const auto &arg : args)
         cmd.push_back(arg);
 
       int rc = run_and_wait(cmd);
-      if (rc == 127) {
+      if (rc == 127)
         throw ProfilerException("perf not found – please install linux-perf");
-      }
     }
     // perf script → text
-    {
-      std::vector<std::string> cmd;
-      cmd.push_back("perf");
-      cmd.push_back("script");
-      cmd.push_back("-i");
-      cmd.push_back(perf_data);
-      // redirect stdout to script_out via shell wrapper not available;
-      // run_and_wait captures output — write it manually
-      std::vector<char *> c_argv;
-      for (auto &s : cmd)
-        c_argv.push_back(const_cast<char *>(s.c_str()));
-      c_argv.push_back(nullptr);
+    run_and_pipe_to_file({"perf", "script", "-i", perf_data}, script_out);
+  }
 
-      int pipefd[2];
-      if (pipe(pipefd) == -1)
-        throw ProfilerException(std::string("pipe: ") + strerror(errno));
-      pid_t child = fork();
-      if (child == -1) {
-        close(pipefd[0]);
-        close(pipefd[1]);
-        throw ProfilerException(std::string("fork: ") + strerror(errno));
-      }
-      if (child == 0) {
-        close(pipefd[0]);
-        dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[1]);
-        execvp(c_argv[0], c_argv.data());
-        _exit(127);
-      }
-      close(pipefd[1]);
-      // Write piped output to script_out file
-      FILE *out = fopen(script_out.c_str(), "w");
-      if (!out) {
-        close(pipefd[0]);
-        throw ProfilerException("fopen script_out");
-      }
-      std::array<char, 4096> buf;
-      ssize_t n;
-      while ((n = read(pipefd[0], buf.data(), buf.size())) > 0)
-        fwrite(buf.data(), 1, n, out);
-      fclose(out);
-      close(pipefd[0]);
-      int status = 0;
-      waitpid(child, &status, 0);
-      int rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-      fprintf(stderr, "[perf] script exit code: %d\n", rc);
-      fflush(stderr);
-    }
+  // ---------------------------------------------------------------------------
+  // Build perf record command arguments (shared by profile_binary_perf and profile_pid)
+  // ---------------------------------------------------------------------------
+  std::vector<std::string> build_perf_record_cmd(const std::string &out_file) const {
+    std::vector<std::string> cmd;
+    cmd.push_back("perf");
+    cmd.push_back("record");
+    cmd.push_back("-F");
+    cmd.push_back(std::to_string(config_.frequency_hz));
+    cmd.push_back("-g");
+    cmd.push_back("--call-graph");
+    cmd.push_back("dwarf,65528");
+    cmd.push_back("-m");
+    cmd.push_back("16M");
+    if (!config_.include_kernel)
+      cmd.push_back("--user-callchains");
+    cmd.push_back("-o");
+    cmd.push_back(out_file);
+    return cmd;
   }
 
   // ---------------------------------------------------------------------------
@@ -933,10 +957,6 @@ public:
       if (!std::getline(line_iss, event_name, ',')) continue;
       
       // Parse value (may be empty for not-supported counters)
-      CounterResult result;
-      result.name = event_name;
-      
-      // Trim whitespace
       auto trim = [](std::string &s) {
         size_t start = s.find_first_not_of(" \t");
         size_t end = s.find_last_not_of(" \t");
@@ -946,7 +966,8 @@ public:
       trim(value_str);
       trim(event_name);
       trim(unit);
-      
+
+      CounterResult result;
       result.name = event_name;
       
       if (!value_str.empty() && value_str != "<not supported>" && value_str != "<not counted>") {
@@ -976,11 +997,6 @@ public:
         if (!extra.empty() && result.comment.empty()) {
           result.comment = extra;
         }
-      }
-      
-      // Calculate IPC and other ratios if we have the data
-      if (event_name == "instructions" && result.value > 0) {
-        // IPC will be calculated after all counters are parsed
       }
       
       results.push_back(result);
@@ -1101,58 +1117,178 @@ public:
     result.cpu_utilization_percent = cpu_util;
     result.is_stat_mode = true;
     
-    // Generate a simple flamegraph text showing counter values
+    // Derive summary metrics from counters
+    uint64_t cycles_val = 0, instructions_val = 0, cache_refs_val = 0, cache_misses_val = 0;
+    for (const auto &c : counters) {
+      if (c.name == "cycles")            cycles_val       = c.value;
+      if (c.name == "instructions")      instructions_val = c.value;
+      if (c.name == "cache-references")  cache_refs_val   = c.value;
+      if (c.name == "cache-misses")      cache_misses_val = c.value;
+    }
+    double ipc = (cycles_val > 0 && instructions_val > 0)
+        ? static_cast<double>(instructions_val) / cycles_val : 0.0;
+    double cache_miss_rate = (cache_refs_val > 0 && cache_misses_val > 0)
+        ? 100.0 * cache_misses_val / cache_refs_val : 0.0;
+
+    // Count non-zero counters for height calculation
+    std::vector<const CounterResult*> visible;
+    for (const auto &c : counters)
+      if (c.value > 0) visible.push_back(&c);
+
+    uint64_t max_val = 0;
+    for (const auto *c : visible)
+      if (c->value > max_val) max_val = c->value;
+
+    // Layout constants
+    const int svg_w     = 900;
+    const int top_pad   = 70;   // title + subtitle
+    const int row_h     = 34;   // height per counter row
+    const int bot_pad   = 90;   // space for summary metrics at bottom
+    const int label_w   = 190;  // left column for label
+    const int bar_x     = label_w + 10;
+    const int bar_max_w = svg_w - bar_x - 120; // max bar width
+    int svg_h = top_pad + static_cast<int>(visible.size()) * row_h + bot_pad;
+
+    // Helper: format large numbers
+    auto fmt_val = [](uint64_t v, char *buf, size_t sz) {
+      if (v >= 1000000000ULL) snprintf(buf, sz, "%.3f B", v / 1000000000.0);
+      else if (v >= 1000000ULL) snprintf(buf, sz, "%.3f M", v / 1000000.0);
+      else if (v >= 1000ULL)    snprintf(buf, sz, "%.3f K", v / 1000.0);
+      else                      snprintf(buf, sz, "%lu", v);
+    };
+
     std::ostringstream svg;
     svg << R"(<?xml version="1.0" standalone="no"?>)" "\n"
-        << "<svg version=\"1.1\" width=\"800\" height=\"400\""
-        << " viewBox=\"0 0 800 400\" xmlns=\"http://www.w3.org/2000/svg\">\n"
+        << "<svg version=\"1.1\""
+        << " width=\"" << svg_w << "\" height=\"" << svg_h << "\""
+        << " viewBox=\"0 0 " << svg_w << " " << svg_h << "\""
+        << " xmlns=\"http://www.w3.org/2000/svg\">\n"
         << "  <rect width=\"100%\" height=\"100%\" fill=\"#1a1a2e\"/>\n"
-        << "  <text x=\"400\" y=\"25\" font-family=\"'Segoe UI',Verdana,sans-serif\""
-        << " font-size=\"16\" fill=\"#e0e0e0\" text-anchor=\"middle\" font-weight=\"bold\">\n"
-        << "    Hardware Performance Counters (perf stat)\n"
-        << "  </text>\n";
-    
-    int y = 60;
-    for (const auto &c : counters) {
-      if (c.value == 0) continue;
-      
-      char value_buf[64];
-      if (c.value > 1000000000) {
-        snprintf(value_buf, sizeof(value_buf), "%.2f B", c.value / 1000000000.0);
-      } else if (c.value > 1000000) {
-        snprintf(value_buf, sizeof(value_buf), "%.2f M", c.value / 1000000.0);
-      } else if (c.value > 1000) {
-        snprintf(value_buf, sizeof(value_buf), "%.2f K", c.value / 1000.0);
+        // Title
+        << "  <text x=\"" << svg_w/2 << "\" y=\"24\""
+        << " font-family=\"'Segoe UI',Verdana,sans-serif\" font-size=\"15\""
+        << " fill=\"#e0e0e0\" text-anchor=\"middle\" font-weight=\"bold\">"
+        << "Hardware Performance Counters (perf stat)</text>\n";
+
+    // Subtitle: time + CPU util (stored as CPUs*100, e.g. 340 = 3.40 CPUs)
+    {
+      char subtitle[128];
+      double cpus_utilized = result.cpu_utilization_percent / 100.0;
+      if (cpus_utilized > 0.0) {
+        snprintf(subtitle, sizeof(subtitle), "%.3f s wall time · %.2f CPUs utilized",
+                 result.time_elapsed_seconds, cpus_utilized);
       } else {
-        snprintf(value_buf, sizeof(value_buf), "%lu", c.value);
+        snprintf(subtitle, sizeof(subtitle), "%.3f s wall time",
+                 result.time_elapsed_seconds);
       }
-      
-      std::string label = c.name + ": " + value_buf;
-      if (!c.unit_name.empty()) {
-        char ratio_buf[32];
-        snprintf(ratio_buf, sizeof(ratio_buf), " (%.2f %s)", c.unit_ratio, c.unit_name.c_str());
-        label += ratio_buf;
-      }
-      
-      svg << "  <text x=\"20\" y=\"" << y << "\" font-family=\"'Segoe UI',Verdana,sans-serif\""
-          << " font-size=\"13\" fill=\"#ccc\">" << label << "</text>\n";
-      
-      if (!c.comment.empty()) {
-        svg << "  <text x=\"400\" y=\"" << y << "\" font-family=\"'Segoe UI',Verdana,sans-serif\""
-            << " font-size=\"11\" fill=\"#888\">" << c.comment << "</text>\n";
-      }
-      
-      y += 25;
+      svg << "  <text x=\"" << svg_w/2 << "\" y=\"44\""
+          << " font-family=\"'Segoe UI',Verdana,sans-serif\" font-size=\"11\""
+          << " fill=\"#888\" text-anchor=\"middle\">" << subtitle << "</text>\n";
     }
-    
-    // Add time info
-    y += 15;
-    char time_buf[64];
-    snprintf(time_buf, sizeof(time_buf), "Time: %.3f s | CPU Util: %.1f%%",
-             result.time_elapsed_seconds, result.cpu_utilization_percent / 100.0);
-    svg << "  <text x=\"20\" y=\"" << y << "\" font-family=\"'Segoe UI',Verdana,sans-serif\""
-        << " font-size=\"12\" fill=\"#aaa\">" << time_buf << "</text>\n";
-    
+
+    // Counter rows: label | proportional bar | value + annotation
+    int row = 0;
+    for (const auto *c : visible) {
+      int y_top = top_pad + row * row_h;
+      int y_mid = y_top + row_h / 2;
+      int y_text = y_mid + 5;
+
+      // Alternating row background
+      if (row % 2 == 0) {
+        svg << "  <rect x=\"0\" y=\"" << y_top << "\" width=\"" << svg_w
+            << "\" height=\"" << row_h << "\" fill=\"#1e1e36\"/>\n";
+      }
+
+      // Label
+      svg << "  <text x=\"" << (label_w - 6) << "\" y=\"" << y_text << "\""
+          << " font-family=\"'Segoe UI',Verdana,sans-serif\" font-size=\"12\""
+          << " fill=\"#bbb\" text-anchor=\"end\">" << c->name << "</text>\n";
+
+      // Bar
+      double bar_frac = (max_val > 0) ? static_cast<double>(c->value) / max_val : 0.0;
+      int bar_w = static_cast<int>(bar_frac * bar_max_w);
+      if (bar_w < 2) bar_w = 2;
+
+      // Color: blue for cycles/instructions, orange for cache, green for branches
+      std::string bar_color = "#4a90d9";
+      if (c->name.find("cache") != std::string::npos || c->name.find("miss") != std::string::npos)
+        bar_color = "#e8a23a";
+      else if (c->name.find("branch") != std::string::npos)
+        bar_color = "#5cb85c";
+      else if (c->name.find("stall") != std::string::npos)
+        bar_color = "#d9534f";
+      else if (c->name.find("tlb") != std::string::npos)
+        bar_color = "#9b59b6";
+
+      svg << "  <rect x=\"" << bar_x << "\" y=\"" << (y_mid - 7)
+          << "\" width=\"" << bar_w << "\" height=\"14\""
+          << " fill=\"" << bar_color << "\" rx=\"3\""
+          << " opacity=\"0.85\"/>\n";
+
+      // Value text after bar
+      char value_buf[64];
+      fmt_val(c->value, value_buf, sizeof(value_buf));
+      std::string val_label = value_buf;
+      if (!c->unit_name.empty()) {
+        char ratio_buf[48];
+        snprintf(ratio_buf, sizeof(ratio_buf), " · %.2f %s", c->unit_ratio, c->unit_name.c_str());
+        val_label += ratio_buf;
+      } else if (!c->comment.empty()) {
+        val_label += "  " + c->comment;
+      }
+
+      svg << "  <text x=\"" << (bar_x + bar_w + 8) << "\" y=\"" << y_text << "\""
+          << " font-family=\"'Segoe UI',Verdana,sans-serif\" font-size=\"11.5\""
+          << " fill=\"#ddd\">" << val_label << "</text>\n";
+
+      ++row;
+    }
+
+    // Summary metrics panel at bottom
+    int panel_y = top_pad + static_cast<int>(visible.size()) * row_h + 12;
+    svg << "  <rect x=\"10\" y=\"" << panel_y
+        << "\" width=\"" << (svg_w - 20) << "\" height=\"65\""
+        << " fill=\"#252540\" rx=\"6\" stroke=\"#3a3a5a\" stroke-width=\"1\"/>\n"
+        << "  <text x=\"22\" y=\"" << (panel_y + 18) << "\""
+        << " font-family=\"'Segoe UI',Verdana,sans-serif\" font-size=\"12\""
+        << " fill=\"#aaa\" font-weight=\"bold\">Derived Metrics</text>\n";
+
+    int mx = 22;
+    // IPC
+    if (ipc > 0.0) {
+      const char* ipc_quality = ipc < 1.0 ? "memory/branch bound" : ipc > 3.0 ? "compute efficient" : "moderate";
+      const char* ipc_color   = ipc < 1.0 ? "#e74c3c" : ipc > 3.0 ? "#2ecc71" : "#f39c12";
+      char ipc_buf[64];
+      snprintf(ipc_buf, sizeof(ipc_buf), "IPC: %.2f (%s)", ipc, ipc_quality);
+      svg << "  <text x=\"" << mx << "\" y=\"" << (panel_y + 38) << "\""
+          << " font-family=\"'Segoe UI',Verdana,sans-serif\" font-size=\"13\""
+          << " fill=\"" << ipc_color << "\">" << ipc_buf << "</text>\n";
+      mx += 260;
+    }
+    // Cache miss rate
+    if (cache_miss_rate > 0.0) {
+      const char* miss_color = cache_miss_rate > 10.0 ? "#e74c3c"
+                             : cache_miss_rate > 3.0  ? "#f39c12" : "#2ecc71";
+      char miss_buf[64];
+      snprintf(miss_buf, sizeof(miss_buf), "L3 Miss Rate: %.2f%%", cache_miss_rate);
+      svg << "  <text x=\"" << mx << "\" y=\"" << (panel_y + 38) << "\""
+          << " font-family=\"'Segoe UI',Verdana,sans-serif\" font-size=\"13\""
+          << " fill=\"" << miss_color << "\">" << miss_buf << "</text>\n";
+      mx += 240;
+    }
+    // Wall time
+    {
+      char t_buf[48];
+      snprintf(t_buf, sizeof(t_buf), "Wall time: %.3f s", result.time_elapsed_seconds);
+      svg << "  <text x=\"" << mx << "\" y=\"" << (panel_y + 38) << "\""
+          << " font-family=\"'Segoe UI',Verdana,sans-serif\" font-size=\"13\""
+          << " fill=\"#ccc\">" << t_buf << "</text>\n";
+    }
+
+    svg << "  <text x=\"22\" y=\"" << (panel_y + 57) << "\""
+        << " font-family=\"'Segoe UI',Verdana,sans-serif\" font-size=\"10\""
+        << " fill=\"#555\">bar width proportional to counter magnitude · IPC &lt; 1.0 = memory or branch bound · higher IPC = better instruction throughput</text>\n";
+
     svg << "</svg>\n";
     result.flamegraph_svg = svg.str();
     
@@ -1235,77 +1371,21 @@ public:
     remove_if_exists(perf_data);
     remove_if_exists(script_out);
 
-    // perf attach to running process
+    // perf attach to running process (assume native/C++ for PID profiling)
     {
-      std::vector<std::string> cmd;
-      cmd.push_back("perf");
-      cmd.push_back("record");
-      cmd.push_back("-F");
-      cmd.push_back(std::to_string(config_.frequency_hz));
-      cmd.push_back("-g");
-      cmd.push_back("--call-graph");
-      cmd.push_back("dwarf,65528"); // For PID profiling, assume native/C++
-      cmd.push_back("-m");
-      cmd.push_back("16M");         // Mmap-Ringpuffer
-      if (!config_.include_kernel)
-        cmd.push_back("--user-callchains");
+      auto cmd = build_perf_record_cmd(perf_data);
       cmd.push_back("-p");
       cmd.push_back(std::to_string(pid));
-      cmd.push_back("-o");
-      cmd.push_back(perf_data);
       cmd.push_back("--duration");
       cmd.push_back(std::to_string(config_.duration_seconds));
 
       int rc = run_and_wait(cmd);
-      if (rc == 127) {
+      if (rc == 127)
         throw ProfilerException("perf not found – please install linux-perf");
-      }
     }
 
     // perf script → text
-    {
-      std::vector<std::string> cmd;
-      cmd.push_back("perf");
-      cmd.push_back("script");
-      cmd.push_back("-i");
-      cmd.push_back(perf_data);
-
-      std::vector<char *> c_argv;
-      for (auto &s : cmd)
-        c_argv.push_back(const_cast<char *>(s.c_str()));
-      c_argv.push_back(nullptr);
-
-      int pipefd[2];
-      if (pipe(pipefd) == -1)
-        throw ProfilerException(std::string("pipe: ") + strerror(errno));
-      pid_t child = fork();
-      if (child == -1) {
-        close(pipefd[0]);
-        close(pipefd[1]);
-        throw ProfilerException(std::string("fork: ") + strerror(errno));
-      }
-      if (child == 0) {
-        close(pipefd[0]);
-        dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[1]);
-        execvp(c_argv[0], c_argv.data());
-        _exit(127);
-      }
-      close(pipefd[1]);
-      FILE *out = fopen(script_out.c_str(), "w");
-      if (!out) {
-        close(pipefd[0]);
-        throw ProfilerException("fopen script_out");
-      }
-      std::array<char, 4096> buf;
-      ssize_t n;
-      while ((n = read(pipefd[0], buf.data(), buf.size())) > 0)
-        fwrite(buf.data(), 1, n, out);
-      fclose(out);
-      close(pipefd[0]);
-      int status = 0;
-      waitpid(child, &status, 0);
-    }
+    run_and_pipe_to_file({"perf", "script", "-i", perf_data}, script_out);
 
     auto end = std::chrono::steady_clock::now();
     uint32_t duration_ms = static_cast<uint32_t>(

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { useProject, useProjectRuns, useProfileBinary, useUpdateProject, useDeleteRun } from '../lib/api';
+import Navigation from '../components/layout/Navigation';
 
 const ESTIMATED_DURATION_MS = 45_000;
 
@@ -124,15 +125,7 @@ export default function ProjectDetail() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <nav className="border-b border-gray-800 bg-gray-950">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16 items-center">
-            <Link to="/" className="text-2xl font-bold text-white hover:text-gray-300">
-              ← RealBench
-            </Link>
-          </div>
-        </div>
-      </nav>
+      <Navigation />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Project Header with Edit */}
@@ -377,6 +370,79 @@ export default function ProjectDetail() {
               {error && <span className="text-red-400 text-sm">Error: {(error as Error).message}</span>}
             </div>
           </form>
+        </div>
+
+        {/* GitHub Action Setup */}
+        <div className="bg-gray-800 rounded-lg p-6 mb-8">
+          <h2 className="text-xl font-bold text-white mb-4">🚀 GitHub Actions Setup</h2>
+          <div className="space-y-4">
+            <div className="p-4 bg-gray-700 rounded-lg">
+              <h3 className="text-white font-semibold mb-2">1. Get Your API Key</h3>
+              <p className="text-gray-300 text-sm mb-2">
+                Generate an API key in <Link to="/settings" className="text-blue-400 hover:text-blue-300">Settings</Link>
+              </p>
+            </div>
+
+            <div className="p-4 bg-gray-700 rounded-lg">
+              <h3 className="text-white font-semibold mb-2">2. Add Repository Secrets</h3>
+              <p className="text-gray-300 text-sm mb-2">
+                In your GitHub repository: Settings → Secrets and variables → Actions
+              </p>
+              <div className="bg-gray-900 p-3 rounded font-mono text-sm mt-2">
+                <div>REALBENCH_API_KEY: your_rbk_key_here</div>
+                <div>REALBENCH_PROJECT_ID: {projectData?.project?.id}</div>
+              </div>
+              <button
+                onClick={() => navigator.clipboard.writeText(projectData?.project?.id || '')}
+                className="mt-2 px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+              >
+                Copy Project ID
+              </button>
+            </div>
+
+            <div className="p-4 bg-gray-700 rounded-lg">
+              <h3 className="text-white font-semibold mb-2">3. Create Workflow File</h3>
+              <p className="text-gray-300 text-sm mb-2">
+                Create `.github/workflows/realbench.yml`:
+              </p>
+              <div className="bg-gray-900 p-3 rounded text-xs overflow-x-auto">
+                <pre>{`name: RealBench Profiling
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Build (${projectData?.project?.language?.toUpperCase()})
+        run: |
+          ${projectData?.project?.language === 'cpp' ? `cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build --parallel` : 
+            projectData?.project?.language === 'rust' ? `cargo build --release` :
+            projectData?.project?.language === 'go' ? `go build -o my_app ./cmd/my_app` : 
+            '# Your build commands here'}
+      
+      - name: Upload to RealBench
+        run: |
+          curl -F "binary=@${
+            projectData?.project?.language === 'cpp' ? 'build/your_binary' :
+            projectData?.project?.language === 'rust' ? 'target/release/your_app' :
+            projectData?.project?.language === 'go' ? 'my_app' : 'path/to/your/binary'
+          }" \\
+               -F "projectId=\${{ secrets.REALBENCH_PROJECT_ID }}" \\
+               -F "commitSha=\${{ github.sha }}" \\
+               -F "branch=\${{ github.head_ref || github.ref_name }}" \\
+               -F "buildType=release" \\
+               -H "Authorization: Bearer \${{ secrets.REALBENCH_API_KEY }}" \\
+               "https://api.realbench.dev/api/v1/profile"`}</pre>
+              </div>
+            </div>
+          </div>
         </div>
 
         <h2 className="text-3xl font-bold text-white mb-8">Profiling Runs</h2>

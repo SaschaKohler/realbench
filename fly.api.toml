@@ -6,6 +6,9 @@ primary_region = "fra"
   dockerfile = "docker/Dockerfile.api"
   context = "."
 
+[deploy]
+  release_command = "node_modules/.bin/drizzle-kit migrate"
+
 [http_service]
   internal_port = 3000
   force_https = true
