@@ -4,6 +4,7 @@ import { db } from '../db/index.js';
 import { profilingRuns } from '../db/schema.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { getOrCreateUser } from '../services/user.js';
+import { getFlamegraphUrl } from '../services/storage.js';
 import { eq } from 'drizzle-orm';
 
 const app = new Hono<{ Variables: Variables }>();
@@ -31,7 +32,11 @@ app.get('/:id', authMiddleware, async (c) => {
     return c.json({ error: 'Run not found' }, 404);
   }
 
-  return c.json({ run });
+  const flamegraphUrl = run.flamegraphUrl
+    ? await getFlamegraphUrl(run.flamegraphUrl)
+    : null;
+
+  return c.json({ run: { ...run, flamegraphUrl } });
 });
 
 app.get('/:id/diff/:baseId', authMiddleware, async (c) => {
@@ -60,9 +65,14 @@ app.get('/:id/diff/:baseId', authMiddleware, async (c) => {
     return c.json({ error: 'Run not found' }, 404);
   }
 
+  const [currentFlamegraphUrl, baselineFlamegraphUrl] = await Promise.all([
+    currentRun.flamegraphUrl ? getFlamegraphUrl(currentRun.flamegraphUrl) : null,
+    baselineRun.flamegraphUrl ? getFlamegraphUrl(baselineRun.flamegraphUrl) : null,
+  ]);
+
   return c.json({
-    current: currentRun,
-    baseline: baselineRun,
+    current: { ...currentRun, flamegraphUrl: currentFlamegraphUrl },
+    baseline: { ...baselineRun, flamegraphUrl: baselineFlamegraphUrl },
   });
 });
 

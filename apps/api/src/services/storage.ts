@@ -30,8 +30,12 @@ export async function uploadFlamegraph(
 
   await s3Client.send(command);
 
+  return key;
+}
+
+export async function getFlamegraphUrl(key: string, expiresIn = 3600): Promise<string> {
   const getCommand = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key });
-  return getSignedUrl(s3Client, getCommand, { expiresIn: 3600 });
+  return getSignedUrl(s3Client, getCommand, { expiresIn });
 }
 
 export async function uploadBinary(
