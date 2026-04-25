@@ -776,23 +776,71 @@ static ProfileResult build_result(std::vector<FnCost> &costs,
     }
   }
 
-  std::sort(costs.begin(), costs.end(),
-            [](const FnCost &a, const FnCost &b) { return a.ir > b.ir; });
+  // Aggregate costs by base symbol name (strip addresses/offsets for grouping)
+  // This handles cases where same function appears at multiple addresses
+  auto get_base_name = [](const std::string& name) -> std::string {
+    // Strip leading hex address if present (e.g., "0xabc memory_stress_test")
+    size_t first_space = name.find(' ');
+    if (first_space != std::string::npos) {
+      std::string prefix = name.substr(0, first_space);
+      // Check if prefix looks like a hex address (starts with 0x or is all hex digits)
+      bool is_hex = true;
+      for (size_t i = 0; i < prefix.size(); ++i) {
+        char c = prefix[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+          is_hex = false;
+          break;
+        }
+      }
+      if (is_hex && prefix.length() >= 4) {
+        // Return just the function name part
+        std::string rest = name.substr(first_space + 1);
+        // Also strip any +0xOFFSET suffix
+        size_t plus = rest.rfind("+0x");
+        if (plus != std::string::npos) {
+          return rest.substr(0, plus);
+        }
+        return rest;
+      }
+    }
+    // Strip +0xOFFSET suffix from non-address-prefixed names
+    size_t plus = name.rfind("+0x");
+    if (plus != std::string::npos) {
+      return name.substr(0, plus);
+    }
+    return name;
+  };
+
+  std::unordered_map<std::string, uint64_t> aggregated_self;
+  std::unordered_map<std::string, uint64_t> aggregated_total;
+  for (const auto &c : costs) {
+    std::string base = get_base_name(c.name);
+    aggregated_self[base] += c.ir;
+    aggregated_total[base] += inclusive.count(c.name) ? inclusive[c.name] : c.ir;
+  }
+
+  // Convert aggregated data to sorted vector
+  std::vector<std::pair<std::string, uint64_t>> aggregated;
+  for (const auto &[name, ir] : aggregated_self) {
+    aggregated.push_back({name, ir});
+  }
+  std::sort(aggregated.begin(), aggregated.end(),
+            [](const auto &a, const auto &b) { return a.second > b.second; });
 
   ProfileResult result;
   result.target_binary = binary_path;
   result.duration_ms = duration_ms;
   result.total_samples = total_ir;
 
-  size_t limit = std::min<size_t>(50, costs.size());
+  size_t limit = std::min<size_t>(50, aggregated.size());
   for (size_t i = 0; i < limit; ++i) {
+    const auto& [name, self_ir] = aggregated[i];
     Hotspot h;
-    h.symbol = costs[i].name;
-    h.self_samples = costs[i].ir;
-    h.total_samples =
-        inclusive.count(costs[i].name) ? inclusive[costs[i].name] : costs[i].ir;
-    h.call_count = costs[i].ir;
-    h.self_pct = (total_ir > 0) ? (100.0 * costs[i].ir / total_ir) : 0.0;
+    h.symbol = name;
+    h.self_samples = self_ir;
+    h.total_samples = aggregated_total[name];
+    h.call_count = self_ir;
+    h.self_pct = (total_ir > 0) ? (100.0 * self_ir / total_ir) : 0.0;
     h.total_pct = (total_ir > 0) ? (100.0 * h.total_samples / total_ir) : 0.0;
     result.hotspots.push_back(h);
   }

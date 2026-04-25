@@ -120,9 +120,65 @@ Pass a JSON blob as `profilingOptions` form field in the curl command:
 | Option | Default | Description |
 |---|---|---|
 | `durationSeconds` | `30` | How long to run the binary |
-| `frequencyHz` | `99` | Sampling frequency |
+| `frequencyHz` | `99` | Sampling frequency (sampling mode only) |
 | `includeKernel` | `false` | Include kernel frames |
-| `mode` | `"sampling"` | `"sampling"` or `"stat"` |
+| `mode` | `"sampling"` | `"sampling"`, `"stat"`, or run both |
+| `hwCounters` | — | Hardware counters for stat mode (see below) |
+| `statDetailed` | `false` | Extra counter detail in stat mode |
+
+### Profiling Modes
+
+**Sampling Mode** (`"mode": "sampling"`)
+- Captures call graphs and generates flamegraphs
+- Identifies hotspots with function-level breakdown
+- ~5% runtime overhead
+- Best for: finding performance bottlenecks, understanding call patterns
+
+**Stat Mode** (`"mode": "stat"`)
+- Measures hardware performance counters
+- Reports: cycles, instructions, IPC, cache misses, branch prediction
+- ~1% runtime overhead (very low)
+- Best for: CI regression detection, hardware efficiency analysis
+
+**Run Both Modes** — The updated workflow template runs both by default, giving you complete analysis.
+
+### Hardware Counters (Stat Mode)
+
+Enable specific counters via `hwCounters`:
+
+```bash
+-F 'profilingOptions={
+  "mode": "stat",
+  "hwCounters": {
+    "cycles": true,
+    "instructions": true,
+    "cache-misses": true,
+    "cache-references": true,
+    "branch-misses": true,
+    "branches": true,
+    "L1-dcache-load-misses": true,
+    "LLC-load-misses": true
+  },
+  "statDetailed": true
+}'
+```
+
+| Counter | What it measures |
+|---|---|
+| `cycles` | Total CPU cycles elapsed |
+| `instructions` | Instructions executed |
+| `cache-misses` | L2/L3 cache misses |
+| `branch-misses` | Branch mispredictions |
+| `L1-dcache-load-misses` | L1 data cache misses |
+| `LLC-load-misses` | Last-level cache misses |
+
+### Manual Trigger
+
+You can manually trigger specific modes via **Actions → RealBench Profiling → Run workflow**:
+
+- **sampling** — Hotspots + flamegraph only
+- **stat** — Hardware counters only  
+- **both** — Complete analysis (default)
 
 ### Non-blocking Mode
 

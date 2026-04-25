@@ -6,6 +6,14 @@
 # Required secrets (set under Settings → Secrets and variables → Actions):
 #   REALBENCH_API_KEY  — your RealBench API key (from https://app.realbench.dev/settings)
 #   REALBENCH_PROJECT_ID — your RealBench project UUID
+#
+# Optional environment variables (for advanced configuration):
+#   REALBENCH_PROFILING_MODE — 'sampling' | 'stat' | 'both' (default: both)
+#
+# Profiling Modes:
+#   • sampling — Call graph, flamegraph, hotspots (perf sampling, ~5% overhead)
+#   • stat — Hardware counters: cycles, instructions, IPC, cache misses (perf stat, ~1% overhead)
+#   • both — Run both modes for complete analysis
 
 name: RealBench Profiling
 
@@ -14,43 +22,70 @@ on:
     branches: [main, master]
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      profiling_mode:
+        description: 'Profiling mode'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - sampling
+          - stat
+          - both
 
 jobs:
-  profile:
-    name: Profile & Analyse
+  # ── SAMPLING MODE: Call graphs, flamegraphs, hotspots ─────────────────────
+  profile-sampling:
+    name: Profile (Sampling)
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: write  # needed to post PR comments
+      pull-requests: write
+    # Run on: push/PR (default) OR manual dispatch with 'sampling'/'both'
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      github.event.inputs.profiling_mode == 'sampling' ||
+      github.event.inputs.profiling_mode == 'both'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       # ── Build your project ────────────────────────────────────────────────
-      # Replace this section with your own build steps.
-      # The binary must be compiled with debug symbols for best results:
-      #   C++  → add  -g -O2  (or use CMAKE_BUILD_TYPE=RelWithDebInfo)
-      #   Rust → use  cargo build --release  (debug info included by default)
-      #   Go   → use  go build  (no extra flags needed)
+      # Replace this with your own build steps.
+      # Debug symbols required for best results:
+      #   C++  → -g -O2 or CMAKE_BUILD_TYPE=RelWithDebInfo
+      #   Rust → cargo build --release
+      #   Go   → go build
 
       - name: Build (example — adapt to your project)
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
           cmake --build build --parallel
 
-      # ── Upload to RealBench ───────────────────────────────────────────────
-      - name: Upload binary to RealBench
+      - name: Upload to RealBench (Sampling Mode)
         id: realbench
         env:
           REALBENCH_API_KEY: ${{ secrets.REALBENCH_API_KEY }}
           REALBENCH_PROJECT_ID: ${{ secrets.REALBENCH_PROJECT_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Detect PR number (empty for push events)
-          PR_NUMBER="${{ github.event.pull_request.number }}"
+          # Validate secrets
+          if [ -z "$REALBENCH_API_KEY" ] || [ -z "$REALBENCH_PROJECT_ID" ]; then
+            echo "❌ Required secrets: REALBENCH_API_KEY, REALBENCH_PROJECT_ID"
+            exit 1
+          fi
 
-          # Path to your compiled binary — adjust this!
-          BINARY_PATH="build/my_binary"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          BINARY_PATH="build/my_binary"  # ← Adjust to your binary path
+
+          if [ ! -f "${BINARY_PATH}" ]; then
+            echo "❌ Binary not found at ${BINARY_PATH}"
+            exit 1
+          fi
+
+          # Sampling mode: captures call graphs and hotspots
+          PROFILING_OPTIONS='{"mode":"sampling","durationSeconds":30,"frequencyHz":99}'
 
           RESPONSE=$(curl -sf \
             -F "binary=@${BINARY_PATH}" \
@@ -58,43 +93,109 @@ jobs:
             -F "commitSha=${{ github.sha }}" \
             -F "branch=${{ github.head_ref || github.ref_name }}" \
             -F "buildType=auto" \
+            -F "profilingOptions=${PROFILING_OPTIONS}" \
             -F "githubRepo=${{ github.repository }}" \
             ${PR_NUMBER:+-F "githubPrNumber=${PR_NUMBER}"} \
             ${PR_NUMBER:+-F "githubToken=${GITHUB_TOKEN}"} \
             -H "Authorization: Bearer ${REALBENCH_API_KEY}" \
             "${REALBENCH_API_URL:-https://api.realbench.dev}/api/v1/profile")
 
-          echo "response=${RESPONSE}" >> "$GITHUB_OUTPUT"
           RUN_ID=$(echo "${RESPONSE}" | jq -r '.runId')
           echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
-          echo "✅ RealBench run enqueued: ${RUN_ID}"
+          echo "✅ Sampling run enqueued: ${RUN_ID}"
 
-      # ── Wait for result (optional — remove if you don't want blocking CI) ─
-      - name: Wait for profiling result
+      # Optional: Wait for completion (remove if non-blocking CI preferred)
+      - name: Wait for sampling result
         if: steps.realbench.outputs.run_id != ''
         env:
           REALBENCH_API_KEY: ${{ secrets.REALBENCH_API_KEY }}
         run: |
           RUN_ID="${{ steps.realbench.outputs.run_id }}"
-          echo "Polling run ${RUN_ID}..."
-
           for i in $(seq 1 30); do
-            STATUS=$(curl -sf \
-              -H "Authorization: Bearer ${REALBENCH_API_KEY}" \
-              "${REALBENCH_API_URL:-https://api.realbench.dev}/api/v1/runs/${RUN_ID}" \
-              | jq -r '.run.status')
-
+            STATUS=$(curl -sf -H "Authorization: Bearer ${REALBENCH_API_KEY}" \
+              "${REALBENCH_API_URL:-https://api.realbench.dev}/api/v1/runs/${RUN_ID}" | jq -r '.run.status')
             echo "  attempt ${i}: status=${STATUS}"
-
-            if [ "${STATUS}" = "done" ]; then
-              echo "✅ Profiling complete."
-              exit 0
-            elif [ "${STATUS}" = "failed" ]; then
-              echo "❌ Profiling failed."
-              exit 1
-            fi
-
+            if [ "${STATUS}" = "done" ]; then echo "✅ Sampling complete"; exit 0; fi
+            if [ "${STATUS}" = "failed" ]; then echo "❌ Sampling failed"; exit 1; fi
             sleep 10
           done
+          echo "⏳ Sampling timed out"
 
-          echo "⏳ Timed out waiting for profiling result (run still in progress)."
+  # ── STAT MODE: Hardware performance counters ───────────────────────────
+  profile-stat:
+    name: Profile (Hardware Counters)
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    # Run on: push/PR (default) OR manual dispatch with 'stat'/'both'
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      github.event.inputs.profiling_mode == 'stat' ||
+      github.event.inputs.profiling_mode == 'both'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build (example — adapt to your project)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build --parallel
+
+      - name: Upload to RealBench (Stat Mode)
+        id: realbench-stat
+        env:
+          REALBENCH_API_KEY: ${{ secrets.REALBENCH_API_KEY }}
+          REALBENCH_PROJECT_ID: ${{ secrets.REALBENCH_PROJECT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$REALBENCH_API_KEY" ] || [ -z "$REALBENCH_PROJECT_ID" ]; then
+            echo "❌ Required secrets: REALBENCH_API_KEY, REALBENCH_PROJECT_ID"
+            exit 1
+          fi
+
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          BINARY_PATH="build/my_binary"  # ← Adjust to your binary path
+
+          if [ ! -f "${BINARY_PATH}" ]; then
+            echo "❌ Binary not found at ${BINARY_PATH}"
+            exit 1
+          fi
+
+          # Stat mode: hardware counters (low overhead, ~1%)
+          # Measures: cycles, instructions, IPC, cache misses, branch prediction
+          PROFILING_OPTIONS='{"mode":"stat","hwCounters":{"cycles":true,"instructions":true,"cache-misses":true,"cache-references":true,"branch-misses":true,"branches":true},"statDetailed":true}'
+
+          RESPONSE=$(curl -sf \
+            -F "binary=@${BINARY_PATH}" \
+            -F "projectId=${REALBENCH_PROJECT_ID}" \
+            -F "commitSha=${{ github.sha }}" \
+            -F "branch=${{ github.head_ref || github.ref_name }}" \
+            -F "buildType=auto" \
+            -F "profilingOptions=${PROFILING_OPTIONS}" \
+            -F "githubRepo=${{ github.repository }}" \
+            ${PR_NUMBER:+-F "githubPrNumber=${PR_NUMBER}"} \
+            ${PR_NUMBER:+-F "githubToken=${GITHUB_TOKEN}"} \
+            -H "Authorization: Bearer ${REALBENCH_API_KEY}" \
+            "${REALBENCH_API_URL:-https://api.realbench.dev}/api/v1/profile")
+
+          RUN_ID=$(echo "${RESPONSE}" | jq -r '.runId')
+          echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "✅ Stat run enqueued: ${RUN_ID}"
+
+      # Optional: Wait for completion
+      - name: Wait for stat result
+        if: steps.realbench-stat.outputs.run_id != ''
+        env:
+          REALBENCH_API_KEY: ${{ secrets.REALBENCH_API_KEY }}
+        run: |
+          RUN_ID="${{ steps.realbench-stat.outputs.run_id }}"
+          for i in $(seq 1 30); do
+            STATUS=$(curl -sf -H "Authorization: Bearer ${REALBENCH_API_KEY}" \
+              "${REALBENCH_API_URL:-https://api.realbench.dev}/api/v1/runs/${RUN_ID}" | jq -r '.run.status')
+            echo "  attempt ${i}: status=${STATUS}"
+            if [ "${STATUS}" = "done" ]; then echo "✅ Stat profiling complete"; exit 0; fi
+            if [ "${STATUS}" = "failed" ]; then echo "❌ Stat profiling failed"; exit 1; fi
+            sleep 10
+          done
+          echo "⏳ Stat profiling timed out"
