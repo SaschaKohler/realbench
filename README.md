@@ -38,6 +38,20 @@ realbench/
 - **Profiler**: C++ (`perf_event_open`, libelf, N-API)
 - **Deploy**: Fly.io (fra region)
 
+## Used In
+
+These repositories already use RealBench for continuous performance profiling in their CI pipelines:
+
+| Repository | Language | Build | Profiling mode |
+|---|---|---|---|
+| [realbench-test-cpp](https://github.com/SaschaKohler/realbench-test-cpp) | C++ | CMake `RelWithDebInfo` | sampling + stat |
+| [test-rust-project](https://github.com/SaschaKohler/test-rust-project) | Rust | `cargo build --release` + `RUSTFLAGS="-g"` | sampling + stat |
+| [test-go-project](https://github.com/SaschaKohler/test-go-project) | Go 1.22 | `go build -gcflags="-N -l"` | sampling + stat |
+
+Each repo builds its binary with debug symbols and uploads it to the RealBench API on every push and pull request. Results — flamegraphs, hotspot breakdowns, hardware counter reports, and LLM optimisation suggestions — are posted directly as PR comments.
+
+Want to add profiling to your own repo? See [`action/README.md`](action/README.md) for a language-specific quick-start guide.
+
 ## Setup
 
 ### Prerequisites
