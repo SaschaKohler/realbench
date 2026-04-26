@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Waitlist } from '@clerk/clerk-react';
+import { useJoinWaitlist } from '../lib/api';
 
 const features = [
   {
@@ -84,7 +85,27 @@ const howItWorks = [
   { step: '5', title: 'Results posted to PR', desc: 'A comment appears on your GitHub PR with the top hotspots, suggestions, and a link to the full dashboard.' },
 ];
 
+const LANGUAGES = ['C++', 'Rust', 'Go', 'Other'] as const;
+
 export default function LandingPage() {
+  const [form, setForm] = useState({ email: '', name: '', useCase: '', language: '' });
+  const [submitted, setSubmitted] = useState(false);
+  const join = useJoinWaitlist();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await join.mutateAsync({
+        email: form.email,
+        name: form.name || undefined,
+        useCase: form.useCase || undefined,
+        language: form.language.toLowerCase().replace('c++', 'cpp') || undefined,
+      });
+      setSubmitted(true);
+    } catch (err: any) {
+      // error shown inline
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
@@ -222,16 +243,75 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Waitlist form — powered by Clerk */}
+      {/* Waitlist form */}
       <section id="waitlist" className="border-t border-gray-800 py-20">
         <div className="max-w-lg mx-auto px-4 sm:px-6 text-center">
           <h2 className="text-2xl sm:text-3xl font-bold mb-3">Get Early Access</h2>
           <p className="text-gray-400 mb-8">
             RealBench is in closed beta. Join the waitlist and we'll send you access as soon as a slot opens.
           </p>
-          <div className="flex justify-center">
-            <Waitlist afterJoinWaitlistUrl="/?joined=1" signInUrl="/dashboard" />
-          </div>
+          {submitted ? (
+            <div className="bg-green-950/50 border border-green-700 rounded-xl p-8">
+              <div className="text-3xl mb-3">🎉</div>
+              <h3 className="text-lg font-semibold mb-2">You're on the list!</h3>
+              <p className="text-sm text-gray-400">We'll email you at <strong>{form.email}</strong> when your access is ready.</p>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4 text-left">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Email <span className="text-red-400">*</span></label>
+                <input
+                  type="email"
+                  required
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  placeholder="you@company.com"
+                  className="w-full px-3 py-2.5 bg-gray-800 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Name</label>
+                <input
+                  type="text"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder="Optional"
+                  className="w-full px-3 py-2.5 bg-gray-800 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Primary language</label>
+                <select
+                  value={form.language}
+                  onChange={(e) => setForm({ ...form, language: e.target.value })}
+                  className="w-full px-3 py-2.5 bg-gray-800 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500 transition"
+                >
+                  <option value="">— Select —</option>
+                  {LANGUAGES.map((l) => <option key={l} value={l}>{l}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">What will you profile?</label>
+                <textarea
+                  value={form.useCase}
+                  onChange={(e) => setForm({ ...form, useCase: e.target.value })}
+                  placeholder="e.g. a game engine, a database, a trading system…"
+                  rows={3}
+                  className="w-full px-3 py-2.5 bg-gray-800 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition resize-none"
+                />
+              </div>
+              {join.error && (
+                <p className="text-sm text-red-400">{(join.error as Error).message}</p>
+              )}
+              <button
+                type="submit"
+                disabled={join.isPending}
+                className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold rounded-lg transition"
+              >
+                {join.isPending ? 'Joining…' : 'Join the Waitlist'}
+              </button>
+            </form>
+          )}
         </div>
       </section>
 
