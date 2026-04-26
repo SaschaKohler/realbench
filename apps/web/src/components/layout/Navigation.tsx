@@ -2,7 +2,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { UserButton } from '@clerk/clerk-react';
 
 const navigation = [
-  { name: 'Dashboard', href: '/' },
+  { name: 'Dashboard', href: '/dashboard' },
   { name: 'Settings', href: '/settings' },
 ];
 

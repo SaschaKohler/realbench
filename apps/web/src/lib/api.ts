@@ -237,6 +237,34 @@ export function useProfileBinary() {
   });
 }
 
+export function useQuota() {
+  const { getToken } = useAuth();
+
+  return useQuery({
+    queryKey: ['quota'],
+    queryFn: async () => {
+      const token = await getToken();
+      return fetchWithAuth('/api/v1/profile/quota', token);
+    },
+    staleTime: 60_000,
+  });
+}
+
+export function useJoinWaitlist() {
+  return useMutation({
+    mutationFn: async (data: { email: string; name?: string; useCase?: string; language?: string }) => {
+      const response = await fetch(`${API_URL}/api/v1/waitlist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.error || 'Failed to join waitlist');
+      return json;
+    },
+  });
+}
+
 // API Keys management
 export function useApiKeys() {
   const { getToken } = useAuth();

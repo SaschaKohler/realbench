@@ -15,6 +15,45 @@ const FREE_PLAN_BINARY_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
 
 const app = new Hono<{ Variables: Variables }>();
 
+app.get('/quota', authMiddleware, async (c) => {
+  const clerkId = c.get('clerkId');
+  const user = await getOrCreateUser(clerkId);
+
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+
+  const userProjects = await db.query.projects.findMany({
+    where: (projects, { eq }) => eq(projects.userId, user.id),
+    columns: { id: true },
+  });
+  const userProjectIds = userProjects.map((p) => p.id);
+
+  const [{ used }] = await db
+    .select({ used: count() })
+    .from(profilingRuns)
+    .where(
+      userProjectIds.length > 0
+        ? and(
+            inArray(profilingRuns.projectId, userProjectIds),
+            gte(profilingRuns.createdAt, startOfMonth)
+          )
+        : eq(profilingRuns.projectId, '')
+    );
+
+  const isPro = user.plan === 'pro' || user.plan === 'admin';
+
+  return c.json({
+    data: {
+      plan: user.plan,
+      used: Number(used),
+      limit: isPro ? null : FREE_PLAN_RUNS_PER_MONTH,
+      remaining: isPro ? null : Math.max(0, FREE_PLAN_RUNS_PER_MONTH - Number(used)),
+      resetsAt: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toISOString(),
+    },
+  });
+});
+
 app.post('/', authMiddleware, async (c) => {
   const clerkId = c.get('clerkId');
 

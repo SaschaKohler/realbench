@@ -205,19 +205,13 @@ export default function RunDetail() {
                   : 'Interactive call stack visualization. Wider frames = more CPU time. Click to zoom · double-click to reset · use search box to highlight.'}
               </p>
               <div className="rounded-lg overflow-hidden border border-gray-700" style={{ height: '420px' }}>
-                <object
-                  data={run.flamegraphUrl}
-                  type="image/svg+xml"
+                <iframe
+                  src={run.flamegraphUrl}
                   className="w-full h-full"
-                  aria-label={run.profilingMode === 'stat' ? 'Performance counter chart' : 'Flamegraph'}
-                >
-                  <div className="flex items-center justify-center h-full text-gray-500 text-sm">
-                    SVG could not be embedded.{' '}
-                    <a href={run.flamegraphUrl} target="_blank" rel="noopener noreferrer" className="text-blue-400 underline ml-1">
-                      Open directly ↗
-                    </a>
-                  </div>
-                </object>
+                  style={{ border: 'none' }}
+                  title={run.profilingMode === 'stat' ? 'Performance counter chart' : 'Flamegraph'}
+                  sandbox="allow-scripts allow-same-origin"
+                />
               </div>
             </>
           ) : (

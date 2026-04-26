@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useProjects, useCreateProject, useDeleteProject } from '../lib/api';
 import Navigation from '../components/layout/Navigation';
+import QuotaBanner from '../components/ui/QuotaBanner';
 
 export default function Dashboard() {
   const { data, isLoading } = useProjects();
@@ -33,6 +34,7 @@ export default function Dashboard() {
       <Navigation />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <QuotaBanner />
         <div className="flex justify-between items-center mb-8">
           <h2 className="text-3xl font-bold text-white">Projects</h2>
           <button
