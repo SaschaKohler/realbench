@@ -10,6 +10,13 @@ coverage
 .turbo
 *.tsbuildinfo
 
+# Profiler test compiled binaries
+lib/profiler/tests/sample_binary
+lib/profiler/tests/sample_binary_debug
+lib/profiler/tests/sample_binary_go
+lib/profiler/tests/sample_binary_rs
+lib/profiler/tests/linux-binaries/
+
 # C++ Build artifacts
 build/
 cmake-build-*/

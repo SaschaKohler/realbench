@@ -11,6 +11,13 @@ export interface BinaryValidation {
   reason?: string;
 }
 
+export type BinaryLanguage = 'cpp' | 'rust' | 'go' | 'unknown';
+
+export interface LanguageDetection {
+  language: BinaryLanguage;
+  confidence: 'high' | 'medium' | 'low';
+}
+
 /**
  * Validate that the uploaded buffer is a profilable native binary.
  * The profiling worker runs on Linux — only ELF binaries are supported.
@@ -209,6 +216,110 @@ async function analyzeBinaryAtPath(binaryPath: string, _filename: string): Promi
   }
 
   return analysis;
+}
+
+/**
+ * Detect the source language of a binary by analyzing ELF sections and symbols.
+ * Returns the detected language and confidence level.
+ */
+export async function detectBinaryLanguage(binaryBuffer: Buffer, filename: string): Promise<LanguageDetection> {
+  const tempPath = join(tmpdir(), `realbench-lang-${Date.now()}-${filename}`);
+
+  try {
+    await writeFile(tempPath, binaryBuffer);
+    return await detectBinaryLanguageAtPath(tempPath);
+  } finally {
+    await unlink(tempPath).catch(() => {});
+  }
+}
+
+async function detectBinaryLanguageAtPath(binaryPath: string): Promise<LanguageDetection> {
+  try {
+    // Check for Go-specific sections
+    const { stdout: sectionInfo } = await execFileAsync('readelf', ['-S', binaryPath], { timeout: 10000 })
+      .catch(() => ({ stdout: '' }));
+
+    // Go binaries have specific sections
+    if (sectionInfo.includes('.go.buildinfo') ||
+        sectionInfo.includes('.gosymtab') ||
+        sectionInfo.includes('.gopclntab') ||
+        sectionInfo.includes('.go.buildid')) {
+      return { language: 'go', confidence: 'high' };
+    }
+
+    // Rust binaries have .rustc section
+    if (sectionInfo.includes('.rustc')) {
+      return { language: 'rust', confidence: 'high' };
+    }
+
+    // Check for compiler info in notes
+    const { stdout: noteInfo } = await execFileAsync('readelf', ['-n', binaryPath], { timeout: 10000 })
+      .catch(() => ({ stdout: '' }));
+
+    if (noteInfo.includes('rustc')) {
+      return { language: 'rust', confidence: 'high' };
+    }
+    if (noteInfo.includes('Go')) {
+      return { language: 'go', confidence: 'high' };
+    }
+
+    // Check symbols for language-specific patterns
+    const { stdout: symInfo } = await execFileAsync('nm', ['-C', binaryPath], { timeout: 10000 })
+      .catch(() => ({ stdout: '' }));
+
+    // Go runtime symbols
+    if (symInfo.includes('runtime.main') ||
+        symInfo.includes('runtime.goexit') ||
+        symInfo.includes('fmt.Println') ||
+        symInfo.includes('main.main') && symInfo.includes('runtime.')) {
+      return { language: 'go', confidence: 'medium' };
+    }
+
+    // Rust std symbols (mangled)
+    if (symInfo.includes('std::') ||
+        symInfo.includes('core::') ||
+        symInfo.includes('alloc::') ||
+        /_ZN[0-9]+std2io5/.test(symInfo) || // mangled std::io
+        /_ZN[0-9]+core[0-9]/.test(symInfo)) { // mangled core::
+      return { language: 'rust', confidence: 'medium' };
+    }
+
+    // C++ symbols (mangled or demangled)
+    if (symInfo.includes('std::') ||
+        symInfo.includes('__cxx') ||
+        /_ZN[0-9]+/.test(symInfo) || // Itanium C++ ABI mangling
+        symInfo.includes('__cxa_') || // C++ ABI symbols
+        symInfo.includes('__gxx')) {  // G++ runtime
+      return { language: 'cpp', confidence: 'medium' };
+    }
+
+    // Check strings for language-specific patterns
+    const { stdout: stringInfo } = await execFileAsync('strings', [binaryPath], { timeout: 10000 })
+      .catch(() => ({ stdout: '' }));
+
+    if (stringInfo.includes('runtime.gc') ||
+        stringInfo.includes('go.buildid') ||
+        stringInfo.includes('GOROOT')) {
+      return { language: 'go', confidence: 'medium' };
+    }
+
+    if (stringInfo.includes('rustc') ||
+        stringInfo.includes('rust_builtin') ||
+        stringInfo.includes('libstd-')) {
+      return { language: 'rust', confidence: 'medium' };
+    }
+
+    // If we see GCC/Clang but no specific language indicators, assume C++
+    // (C++ is the most common native language for these compilers)
+    if (noteInfo.includes('GCC') || noteInfo.includes('Clang')) {
+      return { language: 'cpp', confidence: 'low' };
+    }
+
+    // Default: unknown
+    return { language: 'unknown', confidence: 'low' };
+  } catch (error) {
+    return { language: 'unknown', confidence: 'low' };
+  }
 }
 
 /**

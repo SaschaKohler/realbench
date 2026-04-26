@@ -7,7 +7,7 @@ import { getOrCreateUser } from '../services/user.js';
 import { ProfileRequestSchema } from '@realbench/shared';
 import { enqueueProfilingJob } from '../workers/queue.js';
 import { uploadBinary } from '../services/storage.js';
-import { analyzeBinary, getDebugBuildInstructions, isProfilableBinary } from '../services/binary-analyzer.js';
+import { analyzeBinary, detectBinaryLanguage, getDebugBuildInstructions, isProfilableBinary } from '../services/binary-analyzer.js';
 import { and, eq, gte, count, inArray } from 'drizzle-orm';
 
 const FREE_PLAN_RUNS_PER_MONTH = 5;
@@ -152,6 +152,21 @@ app.post('/', authMiddleware, async (c) => {
     return c.json({ error: 'Project not found or access denied' }, 404);
   }
 
+  // Detect binary language and validate it matches the project
+  console.log(`Detecting binary language for ${binaryFile.name}...`);
+  const langDetection = await detectBinaryLanguage(binaryBuffer, binaryFile.name);
+  console.log(`Detected language: ${langDetection.language} (confidence: ${langDetection.confidence})`);
+
+  // Validate binary language matches project language
+  if (langDetection.language !== 'unknown' && langDetection.language !== project.language) {
+    return c.json({
+      error: `Binary language mismatch. This project is configured for "${project.language}" but the uploaded binary appears to be "${langDetection.language}". Please upload a ${project.language} binary or create a new project with the correct language.`,
+      detectedLanguage: langDetection.language,
+      projectLanguage: project.language,
+      confidence: langDetection.confidence,
+    }, 400);
+  }
+
   // Analyze binary for debug symbols
   console.log(`Analyzing binary ${binaryFile.name} (${binaryBuffer.length} bytes)...`);
   const analysis = await analyzeBinary(binaryBuffer, binaryFile.name);
@@ -193,6 +208,8 @@ app.post('/', authMiddleware, async (c) => {
     runId: run.id,
     status: 'pending',
     message: 'Profiling job enqueued',
+    detectedLanguage: langDetection.language,
+    languageConfidence: langDetection.confidence,
     binaryAnalysis: {
       hasDebugSymbols: analysis.hasDebugSymbols,
       hasLineInfo: analysis.hasLineInfo,

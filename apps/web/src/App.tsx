@@ -10,8 +10,16 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-900 text-white">
       <Routes>
-        {/* Public landing page */}
-        <Route path="/" element={<LandingPage />} />
+        {/* Public landing page — redirect authenticated users to dashboard */}
+        <Route
+          path="/"
+          element={
+            <>
+              <SignedIn><Navigate to="/dashboard" replace /></SignedIn>
+              <SignedOut><LandingPage /></SignedOut>
+            </>
+          }
+        />
 
         {/* Protected app routes */}
         <Route
