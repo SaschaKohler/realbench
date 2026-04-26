@@ -152,4 +152,16 @@ Required Fly.io secrets (set via `fly secrets set -a <app> KEY=VALUE`):
 
 ## License
 
-MIT
+RealBench uses an **open-core** model:
+
+| Component | License |
+|-----------|---------|
+| `lib/profiler/` — C++ sampling profiler core | [MIT](lib/profiler/LICENSE) |
+| `apps/api/` — Hono API + worker | Proprietary |
+| `apps/web/` — React dashboard | Proprietary |
+| `packages/shared/` — shared TypeScript types | Proprietary |
+| `action/` — GitHub Actions workflow template | MIT |
+
+The C++ profiler core is free to use, fork, and embed in your own projects under the MIT license.
+The hosted service (api, web, worker) is proprietary — you can read the source for reference, but not
+run a competing service from it without permission.

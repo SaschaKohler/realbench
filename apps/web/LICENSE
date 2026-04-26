@@ -1,0 +1,9 @@
+Copyright (c) 2026 Sascha Kohler. All rights reserved.
+
+This software and its source code are proprietary and confidential.
+Unauthorized copying, distribution, or use of this software, in whole or
+in part, is strictly prohibited without explicit written permission from
+the copyright holder.
+
+The open-source C++ profiler core (lib/profiler/) is separately licensed
+under the MIT License.
