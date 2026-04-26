@@ -6,6 +6,70 @@ import { join } from 'path';
 
 const execFileAsync = promisify(execFile);
 
+export interface BinaryValidation {
+  isValid: boolean;
+  reason?: string;
+}
+
+/**
+ * Validate that the uploaded buffer is a profilable native binary.
+ * The profiling worker runs on Linux — only ELF binaries are supported.
+ * Rejected: Mach-O, PE/COFF, scripts, archives, ZIP/JAR/WASM, plain text, etc.
+ */
+export function isProfilableBinary(buffer: Buffer): BinaryValidation {
+  if (buffer.length < 4) {
+    return { isValid: false, reason: 'File is too small to be a valid binary.' };
+  }
+
+  // ELF: 0x7f 'E' 'L' 'F' — the only supported format (profiler runs on Linux)
+  if (buffer[0] === 0x7f && buffer[1] === 0x45 && buffer[2] === 0x4c && buffer[3] === 0x46) {
+    return { isValid: true };
+  }
+
+  // Mach-O: macOS binaries — not supported, profiler runs on Linux
+  const magic32 = buffer.readUInt32BE(0);
+  if (
+    magic32 === 0xfeedface ||
+    magic32 === 0xfeedfacf ||
+    magic32 === 0xcafebabe ||
+    magic32 === 0xcefaedfe ||
+    magic32 === 0xcffaedfe
+  ) {
+    return { isValid: false, reason: 'Mach-O (macOS) binaries are not supported. The profiler runs on Linux — upload an ELF binary compiled for Linux.' };
+  }
+
+  // PE/COFF (Windows): 'M' 'Z' — not supported
+  if (buffer[0] === 0x4d && buffer[1] === 0x5a) {
+    return { isValid: false, reason: 'PE/COFF (Windows) binaries are not supported. The profiler runs on Linux — upload an ELF binary compiled for Linux.' };
+  }
+
+  // Shell scripts / text files
+  if (buffer[0] === 0x23 && buffer[1] === 0x21) {
+    return { isValid: false, reason: 'Script files (shebang) are not profilable. Upload a compiled ELF binary (Linux).' };
+  }
+  // ZIP / JAR / APK (PK magic)
+  if (buffer[0] === 0x50 && buffer[1] === 0x4b) {
+    return { isValid: false, reason: 'ZIP/JAR/APK archives are not profilable. Upload a compiled ELF binary (Linux).' };
+  }
+  // WebAssembly: 0x00 'a' 's' 'm'
+  if (buffer[0] === 0x00 && buffer[1] === 0x61 && buffer[2] === 0x73 && buffer[3] === 0x6d) {
+    return { isValid: false, reason: 'WebAssembly binaries are not supported. Upload a native ELF binary compiled for Linux.' };
+  }
+  // gzip / tar.gz
+  if (buffer[0] === 0x1f && buffer[1] === 0x8b) {
+    return { isValid: false, reason: 'Compressed archives are not profilable. Upload the uncompressed ELF binary.' };
+  }
+  // Plain text (printable ASCII start)
+  if (buffer[0] >= 0x20 && buffer[0] < 0x7f) {
+    return { isValid: false, reason: 'Text files are not profilable. Upload a compiled ELF binary (Linux).' };
+  }
+
+  return {
+    isValid: false,
+    reason: 'Unrecognized file format. Upload a compiled ELF binary for Linux (e.g. built with gcc/clang/cargo/go build on Linux or cross-compiled for Linux).',
+  };
+}
+
 export interface BinaryAnalysis {
   hasDebugSymbols: boolean;
   hasLineInfo: boolean;

@@ -7,7 +7,7 @@ import { getOrCreateUser } from '../services/user.js';
 import { ProfileRequestSchema } from '@realbench/shared';
 import { enqueueProfilingJob } from '../workers/queue.js';
 import { uploadBinary } from '../services/storage.js';
-import { analyzeBinary, getDebugBuildInstructions } from '../services/binary-analyzer.js';
+import { analyzeBinary, getDebugBuildInstructions, isProfilableBinary } from '../services/binary-analyzer.js';
 import { and, eq, gte, count, inArray } from 'drizzle-orm';
 
 const FREE_PLAN_RUNS_PER_MONTH = 5;
@@ -95,6 +95,14 @@ app.post('/', authMiddleware, async (c) => {
   const data = parsed.data;
 
   const binaryBuffer = Buffer.from(await binaryFile.arrayBuffer());
+
+  const binaryValidation = isProfilableBinary(binaryBuffer);
+  if (!binaryValidation.isValid) {
+    return c.json(
+      { error: `Unsupported file type: ${binaryValidation.reason}` },
+      415
+    );
+  }
 
   const user = await getOrCreateUser(clerkId);
 

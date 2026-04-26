@@ -44,7 +44,10 @@ export default function ProjectDetail() {
   const [branch, setBranch] = useState('main');
   const [buildType, setBuildType] = useState<'release' | 'debug'>('release');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const ACCEPTED_BINARY_HINT = 'ELF binary compiled for Linux only (e.g. gcc/g++, cargo build --target x86_64-unknown-linux-gnu, go build). No macOS/Windows binaries, scripts, or archives.';
 
   // Edit project state
   const [isEditingName, setIsEditingName] = useState(false);
@@ -80,9 +83,29 @@ export default function ProjectDetail() {
     setIsEditingName(true);
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    setFileError(null);
+    if (file) {
+      const allowedExtensions = /\.(elf|out|bin|so|o)$/i;
+      const hasNoExtension = !file.name.includes('.');
+      const hasKnownBadExtension = /\.(sh|py|rb|js|ts|zip|tar|gz|jar|wasm|txt|pdf|json|yaml|yml|exe|dll|app|dylib)$/i.test(file.name);
+      if (hasKnownBadExtension) {
+        setFileError(`"${file.name}" is not a supported format. Upload an ELF binary compiled for Linux.`);
+        e.target.value = '';
+        setSelectedFile(null);
+        return;
+      }
+      if (!hasNoExtension && !allowedExtensions.test(file.name)) {
+        setFileError(`"${file.name}" has an unrecognized extension. Upload a Linux ELF binary (typically no extension or .out/.elf).`);
+      }
+    }
+    setSelectedFile(file);
+  };
+
   const handleUpload = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedFile || !commitSha || !id) return;
+    if (!selectedFile || !commitSha || !id || fileError) return;
     
     // Build profiling options
     const profilingOptions: import('../lib/api').ProfilingOptionsInput = {
@@ -214,6 +237,9 @@ export default function ProjectDetail() {
                 minLength={7}
                 className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
               />
+              <p className="text-xs text-gray-500 mt-1">
+                Git commit SHA this binary was built from (7-40 characters). Auto-populated when using GitHub Actions.
+              </p>
             </div>
             <div>
               <label className="block text-sm text-gray-400 mb-1">Branch</label>
@@ -241,10 +267,17 @@ export default function ProjectDetail() {
               <input
                 ref={fileRef}
                 type="file"
-                onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
+                onChange={handleFileChange}
                 required
-                className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-blue-500 file:mr-3 file:bg-gray-600 file:border-0 file:text-white file:rounded file:px-2 file:py-1"
+                className={`w-full bg-gray-700 border rounded px-3 py-2 text-white focus:outline-none focus:border-blue-500 file:mr-3 file:bg-gray-600 file:border-0 file:text-white file:rounded file:px-2 file:py-1 ${
+                  fileError ? 'border-red-500' : 'border-gray-600'
+                }`}
               />
+              {fileError ? (
+                <p className="text-xs text-red-400 mt-1">{fileError}</p>
+              ) : (
+                <p className="text-xs text-gray-500 mt-1">{ACCEPTED_BINARY_HINT}</p>
+              )}
             </div>
             {/* Advanced Options Toggle */}
             <div className="sm:col-span-2">
@@ -361,13 +394,17 @@ export default function ProjectDetail() {
             <div className="sm:col-span-2 flex items-center gap-4">
               <button
                 type="submit"
-                disabled={isUploading || !selectedFile || !commitSha}
+                disabled={isUploading || !selectedFile || !commitSha || !!fileError}
                 className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white px-6 py-2 rounded font-medium transition-colors"
               >
                 {isUploading ? 'Uploading...' : 'Start Profiling'}
               </button>
               {isSuccess && <span className="text-green-400 text-sm">✓ Job enqueued!</span>}
-              {error && <span className="text-red-400 text-sm">Error: {(error as Error).message}</span>}
+              {error && (
+                <span className="text-red-400 text-sm">
+                  {`Error: ${(error as Error).message}`}
+                </span>
+              )}
             </div>
           </form>
         </div>

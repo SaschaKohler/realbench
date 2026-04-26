@@ -226,8 +226,11 @@ export function useProfileBinary() {
           Authorization: `Bearer ${token}`,
         },
         body: formData,
-      }).then((res) => {
-        if (!res.ok) throw new Error('Upload failed');
+      }).then(async (res) => {
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error((body as { error?: string }).error ?? 'Upload failed');
+        }
         return res.json();
       });
     },
