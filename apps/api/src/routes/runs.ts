@@ -32,6 +32,10 @@ app.get('/:id', authMiddleware, async (c) => {
     return c.json({ error: 'Run not found' }, 404);
   }
 
+  if (run.project.userId !== user.id) {
+    return c.json({ error: 'Access denied' }, 403);
+  }
+
   const flamegraphUrl = run.flamegraphUrl
     ? await getFlamegraphUrl(run.flamegraphUrl)
     : null;
@@ -63,6 +67,18 @@ app.get('/:id/diff/:baseId', authMiddleware, async (c) => {
 
   if (!currentRun || !baselineRun) {
     return c.json({ error: 'Run not found' }, 404);
+  }
+
+  if (currentRun.projectId !== baselineRun.projectId) {
+    return c.json({ error: 'Runs must belong to the same project' }, 400);
+  }
+
+  const project = await db.query.projects.findFirst({
+    where: (projects, { eq }) => eq(projects.id, currentRun.projectId),
+  });
+
+  if (!project || project.userId !== user.id) {
+    return c.json({ error: 'Access denied' }, 403);
   }
 
   const [currentFlamegraphUrl, baselineFlamegraphUrl] = await Promise.all([

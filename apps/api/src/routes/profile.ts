@@ -8,6 +8,10 @@ import { ProfileRequestSchema } from '@realbench/shared';
 import { enqueueProfilingJob } from '../workers/queue.js';
 import { uploadBinary } from '../services/storage.js';
 import { analyzeBinary, getDebugBuildInstructions } from '../services/binary-analyzer.js';
+import { and, eq, gte, count, inArray } from 'drizzle-orm';
+
+const FREE_PLAN_RUNS_PER_MONTH = 5;
+const FREE_PLAN_BINARY_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
 
 const app = new Hono<{ Variables: Variables }>();
 
@@ -51,7 +55,47 @@ app.post('/', authMiddleware, async (c) => {
 
   const data = parsed.data;
 
+  const binaryBuffer = Buffer.from(await binaryFile.arrayBuffer());
+
   const user = await getOrCreateUser(clerkId);
+
+  if (user.plan === 'free') {
+    if (binaryBuffer.length > FREE_PLAN_BINARY_SIZE_BYTES) {
+      return c.json(
+        { error: `Free plan allows binaries up to ${FREE_PLAN_BINARY_SIZE_BYTES / 1024 / 1024} MB. Upgrade to Pro for up to 500 MB.` },
+        413
+      );
+    }
+
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const userProjects = await db.query.projects.findMany({
+      where: (projects, { eq }) => eq(projects.userId, user.id),
+      columns: { id: true },
+    });
+    const userProjectIds = userProjects.map((p) => p.id);
+
+    const [{ runsThisMonth }] = await db
+      .select({ runsThisMonth: count() })
+      .from(profilingRuns)
+      .where(
+        userProjectIds.length > 0
+          ? and(
+              inArray(profilingRuns.projectId, userProjectIds),
+              gte(profilingRuns.createdAt, startOfMonth)
+            )
+          : eq(profilingRuns.projectId, '')
+      );
+
+    if (runsThisMonth >= FREE_PLAN_RUNS_PER_MONTH) {
+      return c.json(
+        { error: `Free plan limit reached (${FREE_PLAN_RUNS_PER_MONTH} runs/month). Upgrade to Pro for unlimited profiling.` },
+        429
+      );
+    }
+  }
 
   const project = await db.query.projects.findFirst({
     where: (projects, { eq }) => eq(projects.id, data.projectId),
@@ -60,8 +104,6 @@ app.post('/', authMiddleware, async (c) => {
   if (!project || project.userId !== user.id) {
     return c.json({ error: 'Project not found or access denied' }, 404);
   }
-
-  const binaryBuffer = Buffer.from(await binaryFile.arrayBuffer());
 
   // Analyze binary for debug symbols
   console.log(`Analyzing binary ${binaryFile.name} (${binaryBuffer.length} bytes)...`);

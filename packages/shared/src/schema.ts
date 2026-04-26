@@ -5,7 +5,7 @@ export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
   clerkId: text('clerk_id').notNull().unique(),
   email: text('email').notNull(),
-  plan: text('plan').notNull().default('free'),
+  plan: text('plan').notNull().default('free'), // 'free' | 'pro' | 'admin'
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -87,6 +87,20 @@ export const projectsRelations = relations(projects, ({ one, many }) => ({
 export const profilingRunsRelations = relations(profilingRuns, ({ one }) => ({
   project: one(projects, { fields: [profilingRuns.projectId], references: [projects.id] }),
 }));
+
+export const waitlist = pgTable('waitlist', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull().unique(),
+  name: text('name'),
+  useCase: text('use_case'),
+  language: text('language'),
+  approved: boolean('approved').notNull().default(false),
+  approvedAt: timestamp('approved_at'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export type WaitlistEntry = typeof waitlist.$inferSelect;
+export type NewWaitlistEntry = typeof waitlist.$inferInsert;
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;

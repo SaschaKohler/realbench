@@ -43,6 +43,13 @@
       "when": 1776936042940,
       "tag": "0005_elite_daredevil",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1777187300524,
+      "tag": "0006_confused_tana_nile",
+      "breakpoints": true
     }
   ]
 }

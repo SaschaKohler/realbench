@@ -8,16 +8,18 @@ import profileRoutes from './routes/profile.js';
 import projectsRoutes from './routes/projects.js';
 import runsRoutes from './routes/runs.js';
 import apiKeysRoutes from './routes/api-keys.js';
+import waitlistRoutes from './routes/waitlist.js';
 
 dotenv.config();
 
 const app = new Hono<{ Variables: Variables }>();
 
 app.use('*', logger());
+const isProd = process.env.NODE_ENV === 'production';
 const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:3000',
+  ...(isProd ? [] : ['http://localhost:5173', 'http://localhost:3000']),
   'https://realbench-web.fly.dev',
+  'https://app.realbench.dev',
   ...(process.env.CORS_ORIGIN ? [process.env.CORS_ORIGIN] : []),
 ];
 
@@ -43,6 +45,7 @@ app.route('/api/v1/profile', profileRoutes);
 app.route('/api/v1/projects', projectsRoutes);
 app.route('/api/v1/runs', runsRoutes);
 app.route('/api/v1/api-keys', apiKeysRoutes);
+app.route('/api/v1/waitlist', waitlistRoutes);
 
 const port = parseInt(process.env.PORT || '3000', 10);
 
