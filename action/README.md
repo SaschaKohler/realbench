@@ -37,8 +37,11 @@ Set `BINARY_PATH` to your compiled binary, e.g. `build/my_app`.
 #### Rust
 
 ```yaml
+- name: Setup Rust
+  uses: dtolnay/rust-toolchain@stable
+
 - name: Build
-  run: cargo build --release
+  run: RUSTFLAGS="-g" cargo build --release
 ```
 
 Set `BINARY_PATH` to `target/release/my_app`.
@@ -46,11 +49,18 @@ Set `BINARY_PATH` to `target/release/my_app`.
 #### Go
 
 ```yaml
+- name: Setup Go
+  uses: actions/setup-go@v5
+  with:
+    go-version: '1.22'
+
 - name: Build
-  run: go build -o my_app ./cmd/my_app
+  env:
+    GOEXPERIMENT: framepointer
+  run: go build -gcflags="-N -l" -o my_app ./cmd/my_app
 ```
 
-Set `BINARY_PATH` to `my_app`.
+Set `BINARY_PATH` to `my_app`. `GOEXPERIMENT=framepointer` and `-gcflags="-N -l"` are required for accurate call graphs — without them frame pointers may be omitted and stack unwinding will be incomplete.
 
 ---
 
@@ -104,8 +114,8 @@ Debug symbols are required for meaningful hotspot names. Without them you'll onl
 | Language | Recommended flags |
 |---|---|
 | C++ | `-g -O2` or `CMAKE_BUILD_TYPE=RelWithDebInfo` |
-| Rust | `cargo build --release` (includes DWARF by default) |
-| Go | `go build` (always includes symbols) |
+| Rust | `RUSTFLAGS="-g" cargo build --release` |
+| Go | `GOEXPERIMENT=framepointer go build -gcflags="-N -l"` |
 
 ## Configuration
 
@@ -183,3 +193,15 @@ You can manually trigger specific modes via **Actions → RealBench Profiling �
 ### Non-blocking Mode
 
 Remove the **"Wait for profiling result"** step if you don't want CI to block on the profiling run. The PR comment will still be posted asynchronously when profiling finishes.
+
+---
+
+## Real-World Examples
+
+These public repositories already use RealBench in their CI pipelines — useful as reference implementations:
+
+| Repository | Language | Build command |
+|---|---|---|
+| [realbench-test-cpp](https://github.com/SaschaKohler/realbench-test-cpp) | C++ (CMake) | `cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo` |
+| [test-rust-project](https://github.com/SaschaKohler/test-rust-project) | Rust | `RUSTFLAGS="-g" cargo build --release` |
+| [test-go-project](https://github.com/SaschaKohler/test-go-project) | Go 1.22 | `GOEXPERIMENT=framepointer go build -gcflags="-N -l"` |
