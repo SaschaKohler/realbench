@@ -23,7 +23,11 @@ if (!publishableKey) {
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <ClerkProvider publishableKey={publishableKey}>
+    <ClerkProvider
+        publishableKey={publishableKey}
+        afterSignInUrl="/dashboard"
+        afterSignUpUrl="/dashboard"
+      >
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <App />
