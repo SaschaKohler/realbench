@@ -6,7 +6,7 @@ primary_region = "fra"
   dockerfile = "apps/web/Dockerfile"
   context = "."
   [build.args]
-    VITE_CLERK_PUBLISHABLE_KEY = "your_clerk_publishable_key_here"
+    VITE_CLERK_PUBLISHABLE_KEY = "pk_test_bGl0ZXJhdGUtcGVhY29jay01OC5jbGVyay5hY2NvdW50cy5kZXYk"
 
 [http_service]
   internal_port = 8080
