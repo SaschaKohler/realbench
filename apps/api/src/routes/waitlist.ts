@@ -1,11 +1,14 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
+import { createClerkClient } from '@clerk/backend';
 import type { Variables } from '../types.js';
 import { db } from '../db/index.js';
 import { waitlist } from '../db/schema.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { getOrCreateUser } from '../services/user.js';
+
+const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
 
 const app = new Hono<{ Variables: Variables }>();
 
@@ -71,14 +74,33 @@ app.post('/:id/approve', authMiddleware, async (c) => {
 
   const entryId = c.req.param('id') as string;
 
+  const entry = await db.query.waitlist.findFirst({ where: eq(waitlist.id, entryId) });
+
+  if (!entry) {
+    return c.json({ error: 'Waitlist entry not found' }, 404);
+  }
+
+  if (entry.approved) {
+    return c.json({ error: 'Already approved' }, 400);
+  }
+
   const [updated] = await db
     .update(waitlist)
     .set({ approved: true, approvedAt: new Date() })
     .where(eq(waitlist.id, entryId))
     .returning();
 
-  if (!updated) {
-    return c.json({ error: 'Waitlist entry not found' }, 404);
+  // Add to Clerk allowlist so the email can sign up
+  try {
+    await clerk.allowlistIdentifiers.createAllowlistIdentifier({
+      identifier: entry.email,
+      notify: true,
+    });
+  } catch (err: any) {
+    // Ignore "already on allowlist" errors
+    if (!err?.message?.includes('already')) {
+      console.error('Clerk allowlist error:', err);
+    }
   }
 
   return c.json({ data: updated });
