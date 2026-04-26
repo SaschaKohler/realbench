@@ -6,7 +6,7 @@ Automatically profile your C++, Rust, or Go binary on every push or pull request
 
 ### 1. Create a RealBench Project
 
-1. Sign in at [app.realbench.dev](https://app.realbench.dev)
+1. Sign in at [realbench-web.fly.dev](https://realbench-web.fly.dev/)
 2. Create a new project and copy the **Project ID** (UUID)
 3. Go to **Settings → API Keys** and generate a new key (starts with `rbk_`)
 
