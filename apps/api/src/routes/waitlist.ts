@@ -42,6 +42,14 @@ app.post('/', async (c) => {
     language: parsed.data.language ?? null,
   });
 
+  // Mirror to Clerk's waitlist so it appears in the Clerk dashboard
+  try {
+    await clerk.waitlistEntries.create({ emailAddress: parsed.data.email });
+  } catch (err: any) {
+    // Non-fatal — DB entry is the source of truth
+    console.warn('Clerk waitlist sync failed:', err?.message);
+  }
+
   return c.json({ message: 'You are on the waitlist! We will notify you when your access is ready.' }, 201);
 });
 
