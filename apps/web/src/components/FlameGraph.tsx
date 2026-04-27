@@ -194,9 +194,9 @@ function hitTest(list: RenderFrame[], px: number, py: number): RenderFrame | nul
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
-interface Props { runId: string; fullHeight?: boolean; }
+interface Props { runId?: string; svgContent?: string; fullHeight?: boolean; }
 
-export default function FlameGraph({ runId, fullHeight = false }: Props) {
+export default function FlameGraph({ runId, svgContent, fullHeight = false }: Props) {
   const { getToken } = useAuth();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -217,22 +217,36 @@ export default function FlameGraph({ runId, fullHeight = false }: Props) {
     setError(null);
     setFrames(null);
     setFocused(null);
+
+    const handleParsed = (text: string) => {
+      if (cancelled) return;
+      const parsed = parseSvgFlamegraph(text);
+      if (!parsed || parsed.length === 0) {
+        setError('Could not parse flamegraph — no frames found.');
+        setLoading(false);
+        return;
+      }
+      const root = parsed.find(f => f.depth === 0) ?? parsed[0];
+      setFrames(parsed);
+      setFocused(root);
+      setTotalSamples(root.samples || 1);
+      setLoading(false);
+    };
+
+    if (svgContent) {
+      handleParsed(svgContent);
+      return () => { cancelled = true; };
+    }
+
+    if (!runId) {
+      setError('No run ID provided.');
+      setLoading(false);
+      return () => { cancelled = true; };
+    }
+
     getToken()
       .then(token => fetchFlamegraphSvg(runId, token))
-      .then(text => {
-        if (cancelled) return;
-        const parsed = parseSvgFlamegraph(text);
-        if (!parsed || parsed.length === 0) {
-          setError('Could not parse flamegraph — no frames found.');
-          setLoading(false);
-          return;
-        }
-        const root = parsed.find(f => f.depth === 0) ?? parsed[0];
-        setFrames(parsed);
-        setFocused(root);
-        setTotalSamples(root.samples || 1);
-        setLoading(false);
-      })
+      .then(handleParsed)
       .catch(e => {
         if (!cancelled) {
           setError(`Failed to load: ${(e as Error).message}`);
@@ -240,7 +254,7 @@ export default function FlameGraph({ runId, fullHeight = false }: Props) {
         }
       });
     return () => { cancelled = true; };
-  }, [runId, getToken]);
+  }, [runId, svgContent, getToken]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;

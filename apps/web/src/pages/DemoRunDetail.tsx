@@ -1,4 +1,120 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import FlameGraph from '../components/FlameGraph.js';
+
+// ---------------------------------------------------------------------------
+// Demo flamegraph SVG — matches the format produced by flamegraph.cpp
+// <g class="frame"> with <title>name — N samples (X%)</title>
+// Layout: 1200px wide, top_pad=60, frame_height=20
+// ---------------------------------------------------------------------------
+const DEMO_SVG = `<?xml version="1.0" standalone="no"?>
+<svg version="1.1" width="1200" height="360" viewBox="0 0 1200 360"
+     xmlns="http://www.w3.org/2000/svg" id="rbfg">
+  <rect width="100%" height="100%" fill="#1a1a2e"/>
+  <!-- depth 0: all -->
+  <g class="frame">
+    <title>all — 2970 samples (100.00%)</title>
+    <rect x="1" y="60" width="1198" height="19" fill="#4a4a6a" rx="2"/>
+  </g>
+  <!-- depth 1 -->
+  <g class="frame">
+    <title>main — 2970 samples (100.00%)</title>
+    <rect x="1" y="80" width="1198" height="19" fill="#d84010" rx="2"/>
+  </g>
+  <!-- depth 2 -->
+  <g class="frame">
+    <title>MatMul::multiply — 1430 samples (48.15%)</title>
+    <rect x="1" y="100" width="577" height="19" fill="#d84010" rx="2"/>
+  </g>
+  <g class="frame">
+    <title>Matrix::transpose — 552 samples (18.59%)</title>
+    <rect x="579" y="100" width="222" height="19" fill="#dc7810" rx="2"/>
+  </g>
+  <g class="frame">
+    <title>std::sort introsort — 368 samples (12.39%)</title>
+    <rect x="802" y="100" width="148" height="19" fill="#c8b910" rx="2"/>
+  </g>
+  <g class="frame">
+    <title>MemPool::alloc — 178 samples (5.99%)</title>
+    <rect x="951" y="100" width="71" height="19" fill="#58a032" rx="2"/>
+  </g>
+  <g class="frame">
+    <title>pthread_cond_wait — 148 samples (4.98%)</title>
+    <rect x="1023" y="100" width="59" height="19" fill="#334466" rx="2"/>
+  </g>
+  <g class="frame">
+    <title>__pthread_mutex_lock — 89 samples (3.00%)</title>
+    <rect x="1083" y="100" width="35" height="19" fill="#a05820" rx="2"/>
+  </g>
+  <g class="frame">
+    <title>other — 89 samples (3.00%)</title>
+    <rect x="1119" y="100" width="80" height="19" fill="#507050" rx="2"/>
+  </g>
+  <!-- depth 3 under MatMul -->
+  <g class="frame">
+    <title>MatMul::inner_loop — 1256 samples (42.29%)</title>
+    <rect x="1" y="120" width="506" height="19" fill="#c03010" rx="2"/>
+  </g>
+  <g class="frame">
+    <title>MatMul::prefetch — 174 samples (5.86%)</title>
+    <rect x="508" y="120" width="70" height="19" fill="#dc7810" rx="2"/>
+  </g>
+  <!-- depth 3 under transpose -->
+  <g class="frame">
+    <title>Matrix::transpose::swap_block — 430 samples (14.48%)</title>
+    <rect x="579" y="120" width="173" height="19" fill="#dc7810" rx="2"/>
+  </g>
+  <g class="frame">
+    <title>std::memcpy — 119 samples (4.01%)</title>
+    <rect x="753" y="120" width="48" height="19" fill="#c8b910" rx="2"/>
+  </g>
+  <!-- depth 3 under sort -->
+  <g class="frame">
+    <title>std::__introsort_loop — 310 samples (10.44%)</title>
+    <rect x="802" y="120" width="125" height="19" fill="#c8b910" rx="2"/>
+  </g>
+  <g class="frame">
+    <title>std::__insertion_sort — 57 samples (1.92%)</title>
+    <rect x="928" y="120" width="23" height="19" fill="#c8b910" rx="2"/>
+  </g>
+  <!-- depth 4 under inner_loop -->
+  <g class="frame">
+    <title>MatMul::inner_loop::fmadd — 890 samples (29.97%)</title>
+    <rect x="1" y="140" width="358" height="19" fill="#b02808" rx="2"/>
+  </g>
+  <g class="frame">
+    <title>MatMul::inner_loop::load_tile — 366 samples (12.32%)</title>
+    <rect x="360" y="140" width="147" height="19" fill="#c03010" rx="2"/>
+  </g>
+  <!-- depth 4 under swap_block -->
+  <g class="frame">
+    <title>std::memcpy — 430 samples (14.48%)</title>
+    <rect x="579" y="140" width="173" height="19" fill="#c8b910" rx="2"/>
+  </g>
+  <!-- depth 4 under __introsort_loop -->
+  <g class="frame">
+    <title>Comparator::operator() — 223 samples (7.51%)</title>
+    <rect x="802" y="140" width="89" height="19" fill="#50a028" rx="2"/>
+  </g>
+  <g class="frame">
+    <title>std::iter_swap — 87 samples (2.93%)</title>
+    <rect x="892" y="140" width="35" height="19" fill="#c8b910" rx="2"/>
+  </g>
+  <!-- depth 5 under fmadd -->
+  <g class="frame">
+    <title>__builtin_ia32_fmadd_pd256 — 890 samples (29.97%)</title>
+    <rect x="1" y="160" width="358" height="19" fill="#a02000" rx="2"/>
+  </g>
+  <!-- depth 5 under load_tile -->
+  <g class="frame">
+    <title>MatMul::inner_loop::load_tile::prefetch_next — 200 samples (6.73%)</title>
+    <rect x="360" y="160" width="80" height="19" fill="#b02808" rx="2"/>
+  </g>
+  <g class="frame">
+    <title>MatMul::inner_loop::load_tile::cache_miss_stall — 166 samples (5.59%)</title>
+    <rect x="441" y="160" width="66" height="19" fill="#c03010" rx="2"/>
+  </g>
+</svg>`;
 
 // ---------------------------------------------------------------------------
 // Realistic demo data — represents a C++ matrix-multiply benchmark profiled
@@ -156,6 +272,7 @@ export default function DemoRunDetail() {
   const run = DEMO_RUN;
   const hotspots = DEMO_HOTSPOTS;
   const counters = DEMO_COUNTERS;
+  const [fullscreen, setFullscreen] = useState(false);
   const nonZeroCounters = counters.filter((c) => c.value > 0);
 
   const totalSleepPct = hotspots
@@ -178,9 +295,22 @@ export default function DemoRunDetail() {
             <Link to="/" className="text-2xl font-bold text-white hover:text-gray-300">
               RealBench
             </Link>
-            <span className="px-3 py-1 rounded-full bg-yellow-900/60 text-yellow-300 text-xs font-semibold tracking-wide uppercase">
-              Live Demo
-            </span>
+            <div className="flex items-center gap-3">
+              <a
+                href="https://github.com/SaschaKohler/realbench"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-gray-400 hover:text-white transition"
+                title="View source on GitHub"
+              >
+                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
+                </svg>
+              </a>
+              <span className="px-3 py-1 rounded-full bg-yellow-900/60 text-yellow-300 text-xs font-semibold tracking-wide uppercase">
+                Live Demo
+              </span>
+            </div>
           </div>
         </div>
       </nav>
@@ -237,36 +367,39 @@ export default function DemoRunDetail() {
           </dl>
         </div>
 
-        {/* Flamegraph placeholder */}
-        <div className="bg-gray-800 rounded-lg p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-3">Flamegraph</h3>
-          <p className="text-gray-400 text-sm mb-3">
-            Interactive call stack visualization. Wider frames = more CPU time. Click to zoom, double-click to reset.
-          </p>
-          <div className="rounded-lg overflow-hidden border border-gray-700 bg-gray-900 flex items-center justify-center" style={{ height: '420px' }}>
-            <div className="text-center px-8">
-              {/* Simplified inline flamegraph sketch */}
-              <div className="mb-6 mx-auto max-w-2xl">
-                <div className="bg-orange-700/80 rounded-sm py-2 text-xs text-white font-mono mb-0.5">all (100%)</div>
-                <div className="flex gap-0.5 mb-0.5">
-                  <div className="bg-red-600/80 rounded-sm py-2 text-xs text-white font-mono flex-[48]">MatMul::multiply (48.1%)</div>
-                  <div className="bg-orange-500/80 rounded-sm py-2 text-xs text-white font-mono flex-[19]">transpose (18.6%)</div>
-                  <div className="bg-yellow-600/80 rounded-sm py-2 text-xs text-white font-mono flex-[12]">introsort (12.4%)</div>
-                  <div className="bg-green-700/60 rounded-sm py-2 text-xs text-white font-mono flex-[21]">other</div>
-                </div>
-                <div className="flex gap-0.5 mb-0.5">
-                  <div className="bg-red-700/70 rounded-sm py-1.5 text-xs text-white font-mono flex-[42]">inner_loop (42.3%)</div>
-                  <div className="bg-red-500/50 rounded-sm py-1.5 text-xs text-white font-mono flex-[6]">acc</div>
-                  <div className="bg-orange-600/60 rounded-sm py-1.5 text-xs text-white font-mono flex-[19]">cache_swap</div>
-                  <div className="bg-yellow-700/50 rounded-sm py-1.5 text-xs text-white font-mono flex-[9]">compare</div>
-                  <div className="bg-gray-700/50 rounded-sm py-1.5 text-xs text-gray-400 font-mono flex-[24]"></div>
-                </div>
-              </div>
-              <p className="text-gray-500 text-sm">
-                Real runs render an interactive Canvas flamegraph — click frames to zoom, search to highlight, double-click to reset.
-              </p>
+        {/* Flamegraph fullscreen modal */}
+        {fullscreen && (
+          <div className="fixed inset-0 z-50 bg-gray-950 flex flex-col">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800 flex-shrink-0">
+              <span className="text-sm font-semibold text-white">Flamegraph — demo/matrix-benchmark</span>
+              <button
+                onClick={() => setFullscreen(false)}
+                className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-colors"
+              >
+                ✕ Close
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 p-4">
+              <FlameGraph svgContent={DEMO_SVG} fullHeight />
             </div>
           </div>
+        )}
+
+        {/* Flamegraph */}
+        <div className="bg-gray-800 rounded-lg p-6 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-semibold">Flamegraph</h3>
+            <button
+              onClick={() => setFullscreen(true)}
+              className="inline-flex items-center gap-1 px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded text-xs font-medium transition-colors"
+            >
+              Open full size ↗
+            </button>
+          </div>
+          <p className="text-gray-400 text-sm mb-3">
+            Interactive call stack visualization. Wider frames = more CPU time. Click to zoom · double-click to reset · use search box to highlight.
+          </p>
+          <FlameGraph svgContent={DEMO_SVG} />
         </div>
 
         {/* Thread efficiency summary */}

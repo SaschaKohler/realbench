@@ -2,6 +2,12 @@
 
 Performance Profiling as a Service for C++, Rust, and Go projects.
 
+**[Live Demo](https://realbench-web.fly.dev/demo)** · **[App](https://realbench-web.fly.dev)** · free during beta
+
+![RealBench demo — flamegraph profiling run](docs/screenshot.png)
+
+---
+
 ## Features
 
 - 🔥 Sampling profiler via `perf_event_open` — zero instrumentation required
