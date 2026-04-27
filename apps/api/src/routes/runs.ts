@@ -6,6 +6,18 @@ import { authMiddleware } from '../middleware/auth.js';
 import { getOrCreateUser } from '../services/user.js';
 import { getFlamegraphUrl } from '../services/storage.js';
 import { eq } from 'drizzle-orm';
+import { GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client } from '@aws-sdk/client-s3';
+import { Readable } from 'stream';
+
+const s3Proxy = new S3Client({
+  region: 'auto',
+  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+  },
+});
 
 const app = new Hono<{ Variables: Variables }>();
 
@@ -89,6 +101,46 @@ app.get('/:id/diff/:baseId', authMiddleware, async (c) => {
   return c.json({
     current: { ...currentRun, flamegraphUrl: currentFlamegraphUrl },
     baseline: { ...baselineRun, flamegraphUrl: baselineFlamegraphUrl },
+  });
+});
+
+app.get('/:id/flamegraph', authMiddleware, async (c) => {
+  const clerkId = c.get('clerkId') as string;
+  const runId = c.req.param('id') as string;
+
+  const user = await db.query.users.findFirst({
+    where: (users, { eq }) => eq(users.clerkId, clerkId),
+  });
+  if (!user) return c.json({ error: 'User not found' }, 404);
+
+  const run = await db.query.profilingRuns.findFirst({
+    where: (profilingRuns, { eq }) => eq(profilingRuns.id, runId),
+    with: { project: true },
+  });
+  if (!run) return c.json({ error: 'Run not found' }, 404);
+  if (run.project.userId !== user.id) return c.json({ error: 'Access denied' }, 403);
+  if (!run.flamegraphUrl) return c.json({ error: 'No flamegraph available' }, 404);
+
+  const command = new GetObjectCommand({
+    Bucket: process.env.R2_BUCKET_NAME!,
+    Key: run.flamegraphUrl,
+  });
+
+  const s3Response = await s3Proxy.send(command);
+  const stream = s3Response.Body as Readable;
+
+  const chunks: Buffer[] = [];
+  await new Promise<void>((resolve, reject) => {
+    stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+    stream.on('end', resolve);
+    stream.on('error', reject);
+  });
+
+  return new Response(Buffer.concat(chunks), {
+    headers: {
+      'Content-Type': 'image/svg+xml',
+      'Cache-Control': 'private, max-age=3600',
+    },
   });
 });
 

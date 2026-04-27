@@ -10,6 +10,7 @@ import { uploadBinary } from '../services/storage.js';
 import { analyzeBinary, detectBinaryLanguage, getDebugBuildInstructions, isProfilableBinary } from '../services/binary-analyzer.js';
 import { and, eq, gte, count, inArray } from 'drizzle-orm';
 
+const BETA_UNLIMITED = true;
 const FREE_PLAN_RUNS_PER_MONTH = 5;
 const FREE_PLAN_BINARY_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
 
@@ -42,14 +43,16 @@ app.get('/quota', authMiddleware, async (c) => {
     );
 
   const isPro = user.plan === 'pro' || user.plan === 'admin';
+  const unlimited = isPro || BETA_UNLIMITED;
 
   return c.json({
     data: {
       plan: user.plan,
       used: Number(used),
-      limit: isPro ? null : FREE_PLAN_RUNS_PER_MONTH,
-      remaining: isPro ? null : Math.max(0, FREE_PLAN_RUNS_PER_MONTH - Number(used)),
+      limit: unlimited ? null : FREE_PLAN_RUNS_PER_MONTH,
+      remaining: unlimited ? null : Math.max(0, FREE_PLAN_RUNS_PER_MONTH - Number(used)),
       resetsAt: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toISOString(),
+      beta: BETA_UNLIMITED,
     },
   });
 });
@@ -114,33 +117,35 @@ app.post('/', authMiddleware, async (c) => {
       );
     }
 
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
+    if (!BETA_UNLIMITED) {
+      const startOfMonth = new Date();
+      startOfMonth.setDate(1);
+      startOfMonth.setHours(0, 0, 0, 0);
 
-    const userProjects = await db.query.projects.findMany({
-      where: (projects, { eq }) => eq(projects.userId, user.id),
-      columns: { id: true },
-    });
-    const userProjectIds = userProjects.map((p) => p.id);
+      const userProjects = await db.query.projects.findMany({
+        where: (projects, { eq }) => eq(projects.userId, user.id),
+        columns: { id: true },
+      });
+      const userProjectIds = userProjects.map((p) => p.id);
 
-    const [{ runsThisMonth }] = await db
-      .select({ runsThisMonth: count() })
-      .from(profilingRuns)
-      .where(
-        userProjectIds.length > 0
-          ? and(
-              inArray(profilingRuns.projectId, userProjectIds),
-              gte(profilingRuns.createdAt, startOfMonth)
-            )
-          : eq(profilingRuns.projectId, '')
-      );
+      const [{ runsThisMonth }] = await db
+        .select({ runsThisMonth: count() })
+        .from(profilingRuns)
+        .where(
+          userProjectIds.length > 0
+            ? and(
+                inArray(profilingRuns.projectId, userProjectIds),
+                gte(profilingRuns.createdAt, startOfMonth)
+              )
+            : eq(profilingRuns.projectId, '')
+        );
 
-    if (runsThisMonth >= FREE_PLAN_RUNS_PER_MONTH) {
-      return c.json(
-        { error: `Free plan limit reached (${FREE_PLAN_RUNS_PER_MONTH} runs/month). Upgrade to Pro for unlimited profiling.` },
-        429
-      );
+      if (runsThisMonth >= FREE_PLAN_RUNS_PER_MONTH) {
+        return c.json(
+          { error: `Free plan limit reached (${FREE_PLAN_RUNS_PER_MONTH} runs/month). Upgrade to Pro for unlimited profiling.` },
+          429
+        );
+      }
     }
   }
 

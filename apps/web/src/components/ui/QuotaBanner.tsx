@@ -5,9 +5,29 @@ export default function QuotaBanner() {
 
   if (isLoading || !data?.data) return null;
 
-  const { plan, used, limit, remaining, resetsAt } = data.data;
+  const { plan, used, limit, remaining, resetsAt, beta } = data.data;
 
   if (plan === 'pro' || plan === 'admin') return null;
+
+  if (beta) {
+    return (
+      <div className="rounded-lg border border-green-800 bg-green-950/30 px-4 py-3 mb-6">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex flex-col">
+            <span className="text-sm font-medium text-white">
+              Beta — Unlimited profiling runs
+            </span>
+            <span className="text-xs text-gray-400">
+              {used} run{used !== 1 ? 's' : ''} this month · No limits during beta
+            </span>
+          </div>
+          <span className="px-2.5 py-1 rounded-full bg-green-900/60 text-green-300 text-xs font-semibold uppercase tracking-wide">
+            Beta
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   const pct = limit ? Math.round((used / limit) * 100) : 0;
   const resetsDate = new Date(resetsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric' });

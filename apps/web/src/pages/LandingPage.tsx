@@ -114,6 +114,7 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           <span className="text-xl font-bold tracking-tight">RealBench</span>
           <div className="flex items-center gap-4">
+            <Link to="/demo" className="text-sm text-gray-300 hover:text-white transition hidden sm:block">Live Demo</Link>
             <a href="#waitlist" className="text-sm text-gray-300 hover:text-white transition hidden sm:block">Join Waitlist</a>
             <a
               href="https://github.com/SaschaKohler/realbench"
@@ -154,6 +155,12 @@ export default function LandingPage() {
           >
             Join the Waitlist
           </a>
+          <Link
+            to="/demo"
+            className="px-6 py-3 border border-blue-600 hover:border-blue-400 text-blue-300 hover:text-white font-medium rounded-lg transition"
+          >
+            Try Live Demo
+          </Link>
           <a
             href="#how-it-works"
             className="px-6 py-3 border border-gray-600 hover:border-gray-400 text-gray-300 hover:text-white font-medium rounded-lg transition"
@@ -224,24 +231,25 @@ export default function LandingPage() {
       {/* Pricing note */}
       <section className="border-t border-gray-800 py-16 bg-gray-900/40">
         <div className="max-w-2xl mx-auto px-4 sm:px-6 text-center">
-          <h2 className="text-2xl font-bold mb-4">Simple, Transparent Limits</h2>
+          <h2 className="text-2xl font-bold mb-4">Free During Beta</h2>
+          <p className="text-gray-400 mb-8">Everything is free while we're in beta. Join the waitlist to get access.</p>
           <div className="grid sm:grid-cols-2 gap-6 mt-8 text-left">
-            <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-6">
-              <div className="text-sm font-medium text-gray-400 mb-1">Free (Beta)</div>
-              <div className="text-2xl font-bold mb-4">5 runs / month</div>
+            <div className="bg-green-950/30 border border-green-800 rounded-xl p-6">
+              <div className="text-sm font-medium text-green-300 mb-1">Beta (current)</div>
+              <div className="text-2xl font-bold mb-4">Unlimited runs</div>
               <ul className="space-y-2 text-sm text-gray-300">
+                <li className="flex gap-2"><span className="text-green-400">✓</span> Unlimited profiling runs</li>
                 <li className="flex gap-2"><span className="text-green-400">✓</span> Flamegraph visualization</li>
                 <li className="flex gap-2"><span className="text-green-400">✓</span> Hardware counters</li>
-                <li className="flex gap-2"><span className="text-green-400">✓</span> AI optimization suggestions</li>
+                <li className="flex gap-2"><span className="text-green-400">✓</span> Optimization suggestions</li>
                 <li className="flex gap-2"><span className="text-green-400">✓</span> GitHub PR comments</li>
                 <li className="flex gap-2"><span className="text-yellow-400">~</span> Up to 50 MB binary</li>
               </ul>
             </div>
             <div className="bg-blue-950/40 border border-blue-800 rounded-xl p-6">
               <div className="text-sm font-medium text-blue-300 mb-1">Pro (coming soon)</div>
-              <div className="text-2xl font-bold mb-4">Unlimited</div>
+              <div className="text-2xl font-bold mb-4">For teams</div>
               <ul className="space-y-2 text-sm text-gray-300">
-                <li className="flex gap-2"><span className="text-green-400">✓</span> Unlimited profiling runs</li>
                 <li className="flex gap-2"><span className="text-green-400">✓</span> Up to 500 MB binaries</li>
                 <li className="flex gap-2"><span className="text-green-400">✓</span> Priority queue</li>
                 <li className="flex gap-2"><span className="text-green-400">✓</span> Run history &amp; diff archive</li>
@@ -330,7 +338,7 @@ export default function LandingPage() {
           <span>© {new Date().getFullYear()} RealBench</span>
           <div className="flex gap-6">
             <a href="https://github.com/SaschaKohler/realbench" target="_blank" rel="noopener noreferrer" className="hover:text-gray-300 transition">GitHub</a>
-            <a href="mailto:hello@realbench.dev" className="hover:text-gray-300 transition">Contact</a>
+            <a href="mailto:support@sascha-kohler.at" className="hover:text-gray-300 transition">Contact</a>
             <Link to="/dashboard" className="hover:text-gray-300 transition">Dashboard</Link>
           </div>
         </div>

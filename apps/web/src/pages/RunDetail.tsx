@@ -1,5 +1,6 @@
 import { Link, useParams } from 'react-router-dom';
 import { useRun } from '../lib/api';
+import FlameGraph from '../components/FlameGraph.js';
 
 const SLEEP_WAIT_SYMBOLS = new Set([
   '__lll_lock_wait',
@@ -204,15 +205,19 @@ export default function RunDetail() {
                   ? 'Hardware counter values with proportional bars. IPC and cache miss rate derived metrics shown below.'
                   : 'Interactive call stack visualization. Wider frames = more CPU time. Click to zoom · double-click to reset · use search box to highlight.'}
               </p>
-              <div className="rounded-lg overflow-hidden border border-gray-700" style={{ height: '420px' }}>
-                <iframe
-                  src={run.flamegraphUrl}
-                  className="w-full h-full"
-                  style={{ border: 'none' }}
-                  title={run.profilingMode === 'stat' ? 'Performance counter chart' : 'Flamegraph'}
-                  sandbox="allow-scripts allow-same-origin"
-                />
-              </div>
+              {run.profilingMode !== 'stat' ? (
+                <FlameGraph runId={run.id} />
+              ) : (
+                <div className="rounded-lg overflow-hidden border border-gray-700" style={{ height: '420px' }}>
+                  <iframe
+                    src={run.flamegraphUrl}
+                    className="w-full h-full"
+                    style={{ border: 'none' }}
+                    title="Performance counter chart"
+                    sandbox="allow-scripts allow-same-origin"
+                  />
+                </div>
+              )}
             </>
           ) : (
             <p className="text-gray-500 text-sm">No visualization available yet.</p>

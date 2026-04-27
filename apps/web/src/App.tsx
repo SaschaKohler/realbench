@@ -5,6 +5,7 @@ import ProjectDetail from './pages/ProjectDetail';
 import RunDetail from './pages/RunDetail';
 import Settings from './pages/Settings';
 import LandingPage from './pages/LandingPage';
+import DemoRunDetail from './pages/DemoRunDetail';
 
 function App() {
   return (
@@ -58,6 +59,9 @@ function App() {
             </>
           }
         />
+        {/* Public demo — no auth required */}
+        <Route path="/demo" element={<DemoRunDetail />} />
+
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>

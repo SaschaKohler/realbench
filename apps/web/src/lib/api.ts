@@ -299,6 +299,16 @@ export function useCreateApiKey() {
   });
 }
 
+export async function fetchFlamegraphSvg(runId: string, token: string | null): Promise<string> {
+  const response = await fetch(`${API_URL}/api/v1/runs/${runId}/flamegraph`, {
+    headers: {
+      ...(token && { Authorization: `Bearer ${token}` }),
+    },
+  });
+  if (!response.ok) throw new Error(`Failed to load flamegraph: ${response.statusText}`);
+  return response.text();
+}
+
 export function useDeleteApiKey() {
   const { getToken } = useAuth();
   const queryClient = useQueryClient();
