@@ -194,9 +194,9 @@ function hitTest(list: RenderFrame[], px: number, py: number): RenderFrame | nul
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
-interface Props { runId: string; }
+interface Props { runId: string; fullHeight?: boolean; }
 
-export default function FlameGraph({ runId }: Props) {
+export default function FlameGraph({ runId, fullHeight = false }: Props) {
   const { getToken } = useAuth();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -346,7 +346,7 @@ export default function FlameGraph({ runId }: Props) {
   const isZoomed = focused !== null && focused !== rootFrame;
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className={`flex flex-col gap-2${fullHeight ? ' h-full' : ''}`}>
       <div className="flex items-center gap-3 flex-wrap">
         <input
           type="text"
@@ -378,7 +378,7 @@ export default function FlameGraph({ runId }: Props) {
       <div
         ref={containerRef}
         className="relative rounded-lg overflow-hidden border border-gray-700 bg-gray-900"
-        style={{ height: '440px' }}
+        style={{ height: fullHeight ? '100%' : '440px' }}
       >
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center text-gray-400 text-sm z-10">

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useRun } from '../lib/api';
 import FlameGraph from '../components/FlameGraph.js';
@@ -82,6 +83,7 @@ function SelfPctBar({ pct, kind, maxPct }: { pct: number; kind: 'sleep' | 'sync'
 export default function RunDetail() {
   const { id } = useParams<{ id: string }>();
   const { data, isLoading } = useRun(id!);
+  const [fullscreen, setFullscreen] = useState(false);
 
   if (isLoading) {
     return (
@@ -181,21 +183,37 @@ export default function RunDetail() {
           </dl>
         </div>
 
+        {/* Flamegraph fullscreen modal */}
+        {fullscreen && run && (
+          <div className="fixed inset-0 z-50 bg-gray-950 flex flex-col">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800 flex-shrink-0">
+              <span className="text-sm font-semibold text-white">Flamegraph — {run.id}</span>
+              <button
+                onClick={() => setFullscreen(false)}
+                className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-colors"
+              >
+                ✕ Close
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 p-4">
+              <FlameGraph runId={run.id} fullHeight />
+            </div>
+          </div>
+        )}
+
         {/* Flamegraph – full width, embedded inline */}
         <div className="bg-gray-800 rounded-lg p-6 mb-6">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold">
               {run?.profilingMode === 'stat' ? 'Performance Counter Chart' : 'Flamegraph'}
             </h3>
-            {run?.flamegraphUrl && (
-              <a
-                href={run.flamegraphUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+            {run?.profilingMode !== 'stat' && (
+              <button
+                onClick={() => setFullscreen(true)}
                 className="inline-flex items-center gap-1 px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded text-xs font-medium transition-colors"
               >
                 Open full size ↗
-              </a>
+              </button>
             )}
           </div>
           {run?.flamegraphUrl ? (
