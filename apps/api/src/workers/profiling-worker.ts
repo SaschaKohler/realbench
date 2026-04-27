@@ -213,7 +213,7 @@ async function processProfilingJob(data: ProfilingJobData, markJobDone: () => Pr
       .where(eq(profilingRuns.id, runId));
 
     if (githubCtx) {
-      const baseUrl = process.env.DASHBOARD_URL ?? 'https://app.realbench.dev';
+      const baseUrl = process.env.DASHBOARD_URL ?? 'https://realbench-web.fly.dev';
       const dashboardUrl = `${baseUrl}/runs/${runId}`;
       const projectUrl = `${baseUrl}/projects/${projectId}`;
       const commentBody = buildComment({
@@ -226,7 +226,6 @@ async function processProfilingJob(data: ProfilingJobData, markJobDone: () => Pr
         hotspots,
         analysis,
         durationMs: profileResult.durationMs ?? null,
-        hasFlamegraph: !!flamegraphUrl,
       });
       await postOrUpdatePrComment(githubCtx, commentBody);
     }
