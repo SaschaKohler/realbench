@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm';
 
 import { db } from '../db/index.js';
 import { profilingRuns } from '../db/schema.js';
-import { downloadBinary, uploadFlamegraph, getFlamegraphUrl } from '../services/storage.js';
+import { downloadBinary, uploadFlamegraph } from '../services/storage.js';
 import { analyzeProfiling, analyzeStatRun } from '../services/llm.js';
 import { extractSourceSnippets } from '../services/source-extractor.js';
 import { getBoss, PROFILING_QUEUE, ProfilingJobData } from './queue.js';
@@ -213,18 +213,20 @@ async function processProfilingJob(data: ProfilingJobData, markJobDone: () => Pr
       .where(eq(profilingRuns.id, runId));
 
     if (githubCtx) {
-      const dashboardUrl = `${process.env.DASHBOARD_URL ?? 'https://app.realbench.dev'}/runs/${runId}`;
-      const signedFlamegraphUrl = flamegraphUrl ? await getFlamegraphUrl(flamegraphUrl) : null;
+      const baseUrl = process.env.DASHBOARD_URL ?? 'https://app.realbench.dev';
+      const dashboardUrl = `${baseUrl}/runs/${runId}`;
+      const projectUrl = `${baseUrl}/projects/${projectId}`;
       const commentBody = buildComment({
         runId,
         commitSha,
         branch,
         buildType,
         dashboardUrl,
+        projectUrl,
         hotspots,
         analysis,
         durationMs: profileResult.durationMs ?? null,
-        flamegraphUrl: signedFlamegraphUrl,
+        hasFlamegraph: !!flamegraphUrl,
       });
       await postOrUpdatePrComment(githubCtx, commentBody);
     }
