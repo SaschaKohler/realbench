@@ -6,6 +6,8 @@ Performance Profiling as a Service for C++, Rust, and Go projects.
 
 ![RealBench demo — flamegraph profiling run](docs/screenshot.png)
 
+![RealBench — PR comments with flamegraph and LLM suggestions](docs/PRcomments.gif)
+
 ---
 
 ## Features
@@ -128,54 +130,6 @@ sudo sysctl kernel.perf_event_paranoid=-1
 | `DELETE` | `/api/v1/api-keys/:id` | Revoke an API key |
 | `POST` | `/api/v1/waitlist` | Join the waitlist |
 | `GET` | `/api/v1/waitlist/status` | Check waitlist status |
-
-## Deployment (Fly.io)
-
-```bash
-# First-time infrastructure setup
-./scripts/fly-deploy.sh setup
-
-# Deploy all services
-./scripts/fly-deploy.sh all
-
-# Deploy individually
-./scripts/fly-deploy.sh api
-./scripts/fly-deploy.sh worker
-./scripts/fly-deploy.sh web
-```
-
-Required Fly.io secrets (set via `fly secrets set -a <app> KEY=VALUE`):
-
-| Secret | Apps |
-|--------|------|
-| `DATABASE_URL` | api, worker |
-| `CLERK_SECRET_KEY` | api |
-| `CLERK_PUBLISHABLE_KEY` | api |
-| `R2_ACCOUNT_ID` | api, worker |
-| `R2_ACCESS_KEY_ID` | api, worker |
-| `R2_SECRET_ACCESS_KEY` | api, worker |
-| `R2_BUCKET_NAME` | api, worker |
-| `ANTHROPIC_API_KEY` | worker |
-
-## MVP Status
-
-- [x] Monorepo setup (pnpm workspaces)
-- [x] Drizzle ORM schema + migrations (users, projects, profiling_runs)
-- [x] Hono API with Clerk authentication
-- [x] pg-boss job queue (PostgreSQL-native, no Redis)
-- [x] Cloudflare R2 storage integration
-- [x] Anthropic Claude LLM analysis
-- [x] React dashboard (Dashboard, ProjectDetail, RunDetail pages)
-- [x] C++ sampling profiler core (perf_event_open, ELF symbol resolution)
-- [x] Node.js N-API bindings for C++ profiler
-- [x] Flamegraph SVG generation
-- [x] Profile diff / regression detection
-- [x] Fly.io deployment configuration (api, worker, web)
-- [x] GitHub Actions CI
-- [x] GitHub Actions CI/CD integration for user repos (`action/realbench-action.yml`)
-- [ ] Flamegraph interactive viewer (SVG pan/zoom)
-- [ ] Diff visualization in the UI
-- [ ] Stripe billing
 
 ## License
 
