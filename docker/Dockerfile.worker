@@ -5,11 +5,11 @@ FROM ubuntu:24.04 AS builder
 
 WORKDIR /app
 
-# Install Node.js 22
+# Install Node.js 20
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs
 
 # System-Dependencies für C++ Profiler
@@ -55,11 +55,11 @@ FROM ubuntu:24.04 AS production
 
 WORKDIR /app
 
-# Install Node.js 22
+# Install Node.js 20
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 

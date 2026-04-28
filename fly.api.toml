@@ -7,7 +7,7 @@ primary_region = "fra"
   context = "."
 
 [deploy]
-  release_command = "node_modules/.bin/drizzle-kit migrate"
+  release_command = "node dist/db/migrate.js"
 
 [http_service]
   internal_port = 3000
